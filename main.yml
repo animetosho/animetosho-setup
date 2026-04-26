@@ -1,0 +1,368 @@
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  tasks:
+  - name: locale-gen
+    locale_gen:
+      name: en_US.UTF-8
+      state: present
+  - name: set locale
+    command: update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en
+  
+  - name: install build-essential
+    apt:
+      name: build-essential
+      state: present
+  
+  - name: install handy utilities
+    apt:
+      name:
+      - curl
+      - git
+      - p7zip-full
+      - pv
+      - zstd
+      - vnstat
+      - unzip  # may be needed by ansible to unpack ZIP archives
+      state: present
+  - name: install ca-certificates
+    apt:
+      name: ca-certificates
+      state: present
+  - name: install Chrony
+    apt:
+      name: chrony
+      state: present
+  
+  - name: network security
+    copy:
+      dest: /etc/sysctl.d/netsec.conf
+      content: |
+        net.ipv4.conf.all.accept_redirects = 0
+        net.ipv6.conf.all.accept_redirects = 0
+        net.ipv4.conf.all.send_redirects = 0
+        net.ipv4.conf.all.accept_source_route = 0
+        net.ipv6.conf.all.accept_source_route = 0
+        kernel.sysrq = 0
+  - name: kernel tweaks
+    sysctl:
+      reload: yes
+      state: present
+      name: '{{ item.name }}'
+      value: '{{ item.value }}'
+    with_items:
+    - { name: 'net.ipv4.tcp_fastopen', value: 3 }
+  
+  - name: create setup folder
+    file:
+      dest: /root/setup
+      state: directory
+  - name: create NPM tmp folder  # used to 'npm install' whilst ignoring package.json
+    file:
+      dest: /root/setup/npmtmp
+      state: directory
+  
+  - name: install nginx-common
+    apt:
+      name: nginx-common
+      state: present
+      install_recommends: no
+  - name: install nginx build deps
+    apt:
+      name:
+      - libpcre2-dev
+      - libssl-dev
+      - libzip-dev
+      - libbrotli-dev
+  - name: remove nginx echo module if added
+    apt:
+      name: libnginx-mod-http-echo
+      state: absent
+  - name: download nginx src
+    get_url:
+      url: 'http://nginx.org/download/nginx-{{ nginx_ver }}.tar.gz'
+      dest: '/root/setup/nginx-{{ nginx_ver }}.tar.gz'
+    register: nginx_source
+  - name: unpack nginx src
+    unarchive:
+      src: '{{ nginx_source.dest }}'
+      copy: no
+      dest: /root/setup/
+    when: nginx_source.changed
+    register: nginx_source_unpack
+  - name: download nginx brotli src
+    get_url:
+      url: 'https://github.com/google/ngx_brotli/archive/refs/heads/master.zip'
+      dest: '/root/setup/nginx-brotli.zip'
+    when: nginx_source.changed
+    register: nginx_brotli_source
+  - name: unpack nginx brotli src
+    unarchive:
+      src: '{{ nginx_brotli_source.dest }}'
+      copy: no
+      dest: /root/setup/
+    when: nginx_brotli_source.changed
+  - name: download nginx sorted-querystring src
+    get_url:
+      url: 'https://github.com/wandenberg/nginx-sorted-querystring-module/archive/refs/heads/master.zip'
+      dest: '/root/setup/nginx-sqs.zip'
+    when: nginx_source.changed
+    register: nginx_sqs_source
+  - name: unpack nginx sqs src
+    unarchive:
+      src: '{{ nginx_sqs_source.dest }}'
+      copy: no
+      dest: /root/setup/
+    when: nginx_sqs_source.changed
+  - name: create nginx mod_strip dir
+    file:
+      dest: /root/setup/ngx_mod_strip
+      state: directory
+  - name: upload nginx mod_strip
+    copy:
+      src: 'misc/ngx_mod_strip/{{ item }}'
+      dest: '/root/setup/ngx_mod_strip/{{ item }}'
+    with_items:
+    - config
+    - ngx_http_strip_filter_module.c
+  - name: create nginx mod_unzip dir
+    file:
+      dest: /root/setup/ngx_mod_unzip
+      state: directory
+  - name: upload nginx mod_unzip
+    copy:
+      src: 'misc/ngx_mod_unzip/{{ item }}'
+      dest: '/root/setup/ngx_mod_unzip/{{ item }}'
+    with_items:
+    - config
+    - ngx_http_unzip_module.c
+  - name: apply nginx variable name patch
+    patch:
+      src: misc/nginx-variable-name-fix.patch
+      basedir: '/root/setup/nginx-{{ nginx_ver }}'
+      remote_src: no
+    when: nginx_source.changed
+  - name: apply nginx brotli syslib patch
+    patch:
+      src: misc/ngx_brotli-syslib.patch
+      basedir: '/root/setup/ngx_brotli-master'
+      remote_src: no
+    when: nginx_brotli_source.changed
+  - name: configure nginx
+    command: ./configure --with-file-aio --with-http_ssl_module --with-http_gzip_static_module --with-http_gunzip_module --with-http_stub_status_module --without-http_ssi_module --without-http_userid_module --without-http_split_clients_module --without-http_referer_module --without-http_memcached_module --without-http_browser_module --without-http_grpc_module --http-log-path=/var/log/nginx --prefix=/usr --conf-path=/etc/nginx/nginx.conf --error-log-path=/var/log/nginx/error.log --http-log-path=/var/log/nginx/access.log --user=www-data --group=www-data --pid-path=/var/log/nginx/nginx.pid --lock-path=/var/log/nginx/nginx.lock --http-client-body-temp-path=/var/lib/nginx/body --http-proxy-temp-path=/var/lib/nginx/proxy --http-fastcgi-temp-path=/var/lib/nginx/fastcgi --http-uwsgi-temp-path=/var/lib/nginx/uwsgi --with-http_v2_module --add-module=../ngx_mod_strip --with-stream --add-module=../ngx_mod_unzip --add-module=../ngx_brotli-master --add-module=../nginx-sorted-querystring-module-master
+    args:
+      chdir: '/root/setup/nginx-{{ nginx_ver }}'
+    when: nginx_source_unpack.changed
+    register: nginx_configure
+  - name: build & install nginx
+    shell: make -j2 && make install
+    args:
+      chdir: '/root/setup/nginx-{{ nginx_ver }}'
+    when: nginx_configure.changed
+  
+  - name: "install PHP {{ php_ver }}"
+    apt:
+      name:
+      - "php{{ php_ver }}-cli"
+      - "php{{ php_ver }}-curl"
+      - "php{{ php_ver }}-readline"
+      - "php{{ php_ver }}-gd"
+      - "php{{ php_ver }}-mysql"
+      - "php{{ php_ver }}-dev"
+      - "php{{ php_ver }}-mbstring"
+      - "php{{ php_ver }}-fpm"
+      - "php{{ php_ver }}-zstd"
+      - php-msgpack
+      state: present
+    register: php_install
+  - name: configure PHP modules
+    command: '/usr/sbin/php{{ item }}'
+    with_items:
+    - dismod pdo pdo_mysql ftp calendar exif phar gettext shmop tokenizer ffi
+    - dismod -s fpm fileinfo posix sockets sysvmsg sysvsem sysvshm readline
+    - enmod -s cli readline
+    - dismod dom xsl simplexml xmlreader xmlwriter
+    - dismod -s fpm curl xml iconv
+    when: php_install.changed
+  - name: PHP FPM error log
+    file:
+      path: /var/log/php{{ php_ver }}-fpm.err
+      state: touch
+      owner: www-data
+      group: www-data
+  - name: PHP conf
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/php.ini'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?opcache\.enable ?=',              line: 'opcache.enable=1'}
+    - { regexp: '^;?opcache\.memory_consumption ?=',  line: 'opcache.memory_consumption=16'}
+    - { regexp: '^;?opcache\.save_comments ?=',       line: 'opcache.save_comments=0'}
+    - { regexp: '^;?memory_limit ?=',       line: 'memory_limit=20M'}
+    - { regexp: '^;?opcache\.interned_strings_buffer ?=',       line: 'opcache.interned_strings_buffer=1'}
+    - { regexp: '^;?allow_url_fopen ?=',       line: 'allow_url_fopen=Off'}
+    - { regexp: '^;?max_file_uploads ?=',       line: 'max_file_uploads=5'}
+    - { regexp: '^;?upload_max_filesize ?=',       line: 'upload_max_filesize=1M'}
+    - { regexp: '^;?post_max_size ?=',       line: 'post_max_size=2M'}
+  - name: PHP conf (2)
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/php.ini'
+      insertafter: '^;?error_log ?='
+      line: 'error_log=/var/log/php{{ php_ver }}-fpm.err'
+  - name: PHP FPM logrotate for errors
+    template:
+      src: tpl/php-fpm-logrotate.j2
+      dest: /etc/logrotate.d/php{{ php_ver }}-fpm-err
+  
+  - name: install spiped
+    apt:
+      name: spiped
+      state: present
+  
+  # needed for Ansible's mysql_db
+  - name: detect PyMySQL
+    shell: 'test -z "$(apt-cache showpkg python-pymysql)" && echo 3'
+    register: pymysql_name
+  - name: install PyMySQL
+    apt:
+      name: 'python{{ pymysql_name.stdout }}-pymysql'
+      state: present
+      install_recommends: no
+  
+  - name: install MariaDB
+    apt:
+      name:
+      - mariadb-server
+      - mariadb-client
+      state: present
+  - name: ensure MariaDB compression providers are absent
+    apt:
+      name:
+      - mariadb-plugin-provider-bzip2
+      - mariadb-plugin-provider-lz4
+      - mariadb-plugin-provider-lzma
+      - mariadb-plugin-provider-lzo
+      - mariadb-plugin-provider-snappy
+      state: absent
+      purge: yes
+  - name: copy MySQL init script
+    copy:
+      src: misc/mysql-init.sql
+      dest: /root/setup
+  - name: auto restart on OOM
+    lineinfile:
+      dest: /lib/systemd/system/mariadb.service
+      regexp: 'Restart=on-abort'
+      line: 'Restart=on-abnormal'
+  - name: change GTID table to Aria + create DBs
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: all
+      state: import
+      target: /root/setup/mysql-init.sql
+  - name: Mysql log dir
+    file:
+      dest: /var/log/mysql
+      state: directory
+      mode: '2750'
+      owner: mysql
+  
+  - name: spiped key folder
+    file:
+      path: /etc/spiped
+      state: directory
+      group: root
+      owner: root
+      mode: '700'
+  - name: spiped keys
+    copy:
+      src: 'keys/spipe-{{ item }}.key'
+      dest: '/etc/spiped/{{ item }}.key'
+      mode: '600'
+    with_items:
+    - mysql
+    - nginx
+
+  - name: nice-zstd wrapper
+    copy:
+      src: misc/nice-zstd.sh
+      dest: /usr/local/bin/nice-zstd
+      mode: '755'
+  - name: compress log files with zstd
+    blockinfile:
+      dest: /etc/logrotate.conf
+      insertafter: "^#?compress"
+      block: |
+        compresscmd /usr/local/bin/nice-zstd
+        compressext .zst
+        compressoptions -T1 --long -6
+        uncompresscmd /usr/bin/unzstd
+  - name: btmp logrotate
+    lineinfile:
+      dest: /etc/logrotate.d/btmp
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^\s*(dai|month)ly$', line: "\tdaily"}
+    - { regexp: '^\s*rotate', line: "\trotate 3"}
+  - name: mariadb logrotate
+    lineinfile:
+      dest: /etc/logrotate.d/mariadb
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^\s*(dai|month)ly$', line: "  daily"}
+    - { regexp: '^\s*rotate', line: "  rotate 9"}
+    - { regexp: '^\s*minsize', line: "  minsize 1M"}
+
+  - name: journald max log size
+    lineinfile:
+      dest: /etc/systemd/journald.conf
+      regexp: '^#?SystemMaxUse='
+      line: 'SystemMaxUse=200M'
+    register: journald_max_log
+  - name: restart journald
+    service:
+      name: systemd-journald
+      state: restarted
+    when: journald_max_log.changed
+
+  - name: disable unused crons
+    replace:
+      path: /etc/cron.d/{{ item }}
+      regexp: '^([0-9])'
+      replace: '#\1'
+    with_items:
+    - php
+  - name: disable phpsessionclean
+    systemd:
+      name: phpsessionclean.timer
+      enabled: no
+      state: stopped
+
+  - name: Systemd override folders
+    file:
+      dest: /etc/systemd/system/{{ item }}.service.d
+      state: directory
+    with_items:
+    - 'php{{ php_ver }}-fpm'
+    - nginx
+  - name: Auto restart services on failure
+    copy:
+      dest: /etc/systemd/system/{{ item }}.service.d/override.conf
+      content: |
+        [Service]
+        Restart=on-abnormal
+    with_items:
+    - 'php{{ php_ver }}-fpm'
+    - nginx
+    register: systemd_override
+  - name: reload systemctl
+    systemd:
+      daemon_reload: yes
+    when: systemd_override.changed

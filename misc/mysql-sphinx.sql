@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS `sphinx_delta` (
+  `id` VARCHAR(15) NOT NULL,
+  `updated` TIMESTAMP NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Aria;

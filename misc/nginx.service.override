@@ -1,0 +1,9 @@
+[Service]
+Environment="LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libz-ng.so"
+Restart=on-abnormal
+RestartSec=1
+
+# first line clears existing ExecStartPre
+ExecStartPre=
+ExecStartPre=/bin/sh -c 'until getent hosts cdn-eu.anidb.net >/dev/null; do sleep 2; done'
+ExecStartPre=/usr/sbin/nginx -t -q -g "daemon on; master_process on;"

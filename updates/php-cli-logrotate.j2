@@ -1,0 +1,8 @@
+/var/log/php{{ php_ver }}-cli.err {
+	rotate 12
+	weekly
+	missingok
+	notifempty
+	compress
+	delaycompress
+}

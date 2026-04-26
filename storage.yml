@@ -1,0 +1,349 @@
+
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  - keys/passwords.yml
+  tasks:
+  - name: enable TCP BBR
+    copy:
+      dest: /etc/sysctl.d/10-custom-kernel-bbr.conf
+      content: |
+        net.core.default_qdisc=fq
+        net.ipv4.tcp_congestion_control=bbr
+  - name: kernel tweaks
+    sysctl:
+      reload: yes
+      state: present
+      name: '{{ item.name }}'
+      value: '{{ item.value }}'
+    with_items:
+    - { name: 'net.core.rmem_max', value: 1048576 }
+    - { name: 'net.core.wmem_max', value: 1048576 }
+  
+  - name: Add DebMultimedia key
+    apt:
+      deb: http://www.deb-multimedia.org/pool/main/d/deb-multimedia-keyring/deb-multimedia-keyring_2024.9.1_all.deb
+      allow_unauthenticated: yes
+  - name: Add DebMultimedia repo
+    deb822_repository:
+      name: multimedia
+      types: [deb, deb-src]
+      uris: http://www.deb-multimedia.org
+      components: main
+      suites: ['{{ ansible_distribution_release }}', '{{ ansible_distribution_release }}-backports']
+      enabled: yes
+  - name: apt cache DebMultimedia
+    apt:
+      update_cache: yes
+  
+  - name: copy MySQL storage script
+    copy:
+      src: misc/mysql-storage.sql
+      dest: /root/setup
+  - name: create storage DBs
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: all
+      state: import
+      target: /root/setup/mysql-storage.sql
+  
+  - name: nginx sites
+    template:
+      src: 'tpl/nginx/{{ item }}'
+      dest: '/etc/nginx/sites-enabled/{{ item }}'
+    with_items:
+    - _base
+    - status
+    - storage
+  - name: nginx storage site config
+    copy:
+      src: tpl/nginx-storage/stsite
+      dest: /etc/nginx/snippets/stsite
+  - name: nginx webroot dirs
+    file:
+      path: '{{ item }}'
+      state: directory
+    with_items:
+    - /var/www/framesv
+    - /var/www/xzserv
+  - name: nginx caches
+    file:
+      path: '/cache/nginx/{{ item }}'
+      state: directory
+      mode: '700'
+      owner: www-data
+    with_items:
+    - sframes
+    - sframes_full
+    - adbpics
+    - uwsgi
+
+  - name: certificate dirs
+    file:
+      path: '/etc/letsencrypt/{{ item }}'
+      state: directory
+      mode: '700'
+      group: root
+      owner: root
+    with_items:
+    - live
+    - 'live/{{ storage_hostname }}'
+  - name: stub certs
+    file:
+      src: '/etc/ssl/certs/ssl-cert-snakeoil.pem'
+      dest: '/etc/letsencrypt/live/{{ item }}/fullchain.pem'
+      state: link
+    with_items:
+    - '{{ storage_hostname }}'
+  - name: stub keys
+    file:
+      src: '/etc/ssl/private/ssl-cert-snakeoil.key'
+      dest: '/etc/letsencrypt/live/{{ item }}/privkey.pem'
+      state: link
+    with_items:
+    - '{{ storage_hostname }}'
+  - name: restart nginx
+    service:
+      name: nginx
+      state: restarted
+  
+  - name: setup mysql users
+    mysql_user:
+      name: '{{ item.name }}'
+      password: '{{ item.password }}'
+      priv: '{{ item.priv }}'
+      host: localhost
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+    with_items:
+    - { name: xzserv, password: '{{ pwd.web_mysql_xzserv }}', priv: 'toto_repl.*:SELECT/storage.*:SELECT,INSERT,UPDATE,DELETE' }
+  
+  - name: install nodejs
+    apt:
+      name: nodejs
+      state: present
+  - name: install nodejs modules
+    apt:
+      name:
+      - node-async
+      - node-lru-cache
+      - node-buffer-crc32
+      - node-range-parser
+      - node-gyp
+      - node-log4js
+      - node-underscore
+      - node-mysql
+      - npm
+      state: present
+  
+  - name: libav libraries
+    apt:
+      #default_release: '{{ ansible_distribution_release }}-backports'
+      name:
+      - libavformat{{ libav_ver }}
+      - libavcodec{{ libav_ver }}
+      - libavutil{{ libavutil_ver }}
+  - name: install uWSGI
+    apt:
+      name:
+      - uwsgi
+      - uwsgi-plugin-python3
+  - name: framesv INI
+    copy:
+      src: misc/framesv.ini
+      dest: /etc/uwsgi/apps-available/framesv.ini
+  - name: enable framesv
+    file:
+      dest: /etc/uwsgi/apps-enabled/framesv.ini
+      src: /etc/uwsgi/apps-available/framesv.ini
+      state: link
+  - name: start uwsgi service
+    systemd:
+      name: uwsgi
+      enabled: yes
+      state: restarted
+  
+  - name: install rsync
+    apt:
+      name: rsync
+  - name: create lsync user
+    user:
+      create_home: yes
+      name: lsync
+  - name: rsync daemon config
+    copy:
+      src: 'misc/{{ item }}'
+      dest: '/etc/{{ item }}'
+      mode: '600'
+    with_items:
+    - rsyncd.conf
+  - name: rsync secret
+    copy:
+      dest: /etc/rsyncd.secrets
+      mode: '600'
+      content: 'lsync:{{ pwd.storage_rsync }}'
+  - name: enable rsyncd service
+    systemd:
+      name: rsync
+      enabled: yes
+      state: started
+  - name: rsyncd logrotate
+    copy:
+      src: misc/rsyncd-logrotate.txt
+      dest: /etc/logrotate.d/rsyncd
+      backup: no
+
+  - name: spiped rsync key
+    copy:
+      src: 'keys/spipe-{{ item }}.key'
+      dest: '/etc/spiped/{{ item }}.key'
+      mode: '600'
+    with_items:
+    - rsyncd
+  - name: create rsync spiped service
+    template:
+      src: 'tpl/{{ item }}.service'
+      dest: '/etc/systemd/system/{{ item }}.service'
+    with_items:
+    - spiped-rsync4
+    - spiped-rsync6
+  - name: enable rsync spiped IPv4 service
+    systemd:
+      name: '{{ item }}'
+      daemon_reload: yes
+      enabled: yes
+      state: started
+    with_items:
+    - spiped-rsync4
+  - name: disable rsync spiped IPv6 service
+    systemd:
+      name: '{{ item }}'
+      enabled: no
+      state: stopped
+    with_items:
+    - spiped-rsync6
+
+  - name: Storage folder
+    file:
+      path: /storage/storage
+      owner: lsync
+      group: lsync
+      state: directory
+  
+  
+  - name: get code
+    git:
+      repo: https://github.com/animetosho/{{ item.repo }}.git
+      dest: '{{ item.dst }}'
+      force: no
+    register: code_clone
+    ignore_errors: yes
+    failed_when:
+    - code_clone.failed
+    - not 'Local modifications exist in ' in (code_clone.msg | default(''))
+    with_items:
+    - { repo: xz-server, dst: /var/www/xzserv }
+    - { repo: frame-server, dst: /var/www/framesv }
+    - { repo: bestsource, dst: /root/setup/vs-bestsource }
+    - { repo: vs-encodeframe, dst: /root/setup/vs-encodeframe }
+  
+  - name: create xzserv log file
+    file:
+      path: /var/www/xzserv/xzserv.log
+      owner: www-data
+      group: www-data
+      state: touch
+  - name: install xzserv modules
+    npm:
+      name: '{{ item }}'
+      path: /root/setup/npmtmp
+      production: yes
+      global: no
+    with_items:
+    - zstd-napi
+    - '@msgpack/msgpack'
+    register: xzserv_mods
+  - name: place xzserv modules
+    command: mv /root/setup/npmtmp/node_modules /var/www/xzserv/node_modules
+    args:
+      creates: /var/www/xzserv/node_modules
+    when: xzserv_mods.changed
+  - name: create xzserv service
+    copy:
+      src: misc/xzserv.service
+      dest: /etc/systemd/system/xzserv.service
+  - name: xzserv config
+    lineinfile:
+      path: /var/www/xzserv/server.js
+      regexp: "password: '.*',"
+      line: "password: '{{ pwd.web_mysql_xzserv }}',"
+  - name: enable xzserv service
+    systemd:
+      name: xzserv
+      daemon_reload: yes
+      enabled: yes
+      state: started
+  
+  - name: install VS plugin build deps
+    apt:
+      name:
+      - libturbojpeg0-dev
+      - libwebp-dev
+      - libavformat-dev
+      - libavcodec-dev
+      - libavutil-dev
+      - ninja-build
+      - meson
+      - libheif-dev
+      - libxxhash-dev
+      - vapoursynth
+      - vapoursynth-dev
+      state: present
+  
+  - name: encodeframe config
+    command: meson setup build -Disa={{ storage_encodeframe_isa }}
+    args:
+      chdir: '/root/setup/vs-encodeframe'
+    when: code_clone.changed
+    register: encodeframe_config
+  - name: build & install encodeframe
+    shell: ninja -C build && ninja -C build install
+    args:
+      chdir: '/root/setup/vs-encodeframe'
+    when: encodeframe_config.changed
+
+  - name: bestsource config
+    command: meson setup build
+    args:
+      chdir: '/root/setup/vs-bestsource'
+    when: code_clone.changed
+    register: bestsource_config
+  - name: build & install bestsource
+    shell: meson compile -C build && meson install -C build
+    args:
+      chdir: '/root/setup/vs-bestsource'
+    when: bestsource_config.changed
+  
+  
+  - name: download schema for replicated DBs
+    get_url:
+      url: 'https://raw.githubusercontent.com/animetosho/{{ item.repo }}/refs/heads/master/{{ item.src }}.sql'
+      dest: '/root/setup/schema-{{ item.dst }}.sql'
+    with_items:
+    - { repo: animetosho-updater, src: schema/toto_repl, dst: toto_repl }
+  - name: import replicated DB tables
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: '{{ item.db }}'
+      state: import
+      target: /root/setup/schema-{{ item.file }}.sql
+    with_items:
+    - { file: toto_repl, db: toto_repl }
+  
+  

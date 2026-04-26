@@ -1,0 +1,87 @@
+[client]
+skip-ssl
+
+[server]
+skip-name-resolve
+skip-external-locking
+character_set_server    = utf8mb4
+collation_server        = utf8mb4_general_ci
+
+
+max_connections         = 50
+connect_timeout         = 30
+wait_timeout            = 28800
+interactive_timeout     = 28800
+
+#thread_concurrency      = 2  # option deprecated
+max_allowed_packet      = 16M
+thread_cache_size       = 8
+sort_buffer_size        = 1M
+bulk_insert_buffer_size = 4M
+tmp_table_size          = 6M
+max_heap_table_size     = 16M
+join_buffer_size        = 1M
+thread_stack            = 192K
+
+myisam_recover          = BACKUP,FORCE
+aria_recover            = BACKUP
+key_buffer_size         = 128K
+table_open_cache        = 384
+myisam_sort_buffer_size = 128M
+concurrent_insert       = 2
+read_buffer_size        = 1M
+read_rnd_buffer_size    = 1M
+
+aria_pagecache_buffer_size = 1024M
+aria_sort_buffer_size = 8M
+aria_log_file_size = 128M
+
+query_cache_limit       = 512K
+query_cache_size        = 8M
+query_cache_type        = 0
+
+log_error = /var/log/mysql/error.log
+general_log = 0
+general_log_file = /var/log/mysql/mysql.log
+
+
+default_storage_engine  = Aria
+
+performance_schema=0 # default is off in mariadb
+
+skip-ssl
+skip-performance_schema  # doesn't work
+
+skip-innodb
+skip-innodb_cmp_per_index_reset
+skip-innodb_buffer_page_lru
+skip-innodb_buffer_pool_stats
+skip-innodb_metrics
+skip-innodb_ft_default_stopword
+skip-innodb_ft_deleted
+skip-innodb_ft_being_deleted
+skip-innodb_ft_config
+skip-innodb_ft_index_cache
+skip-innodb_ft_index_table
+skip-innodb_sys_tablestats
+skip-innodb_sys_columns
+skip-innodb_sys_fields
+skip-innodb_sys_foreign_cols
+skip-innodb_sys_tablespaces
+skip-innodb_trx
+skip-innodb_lock_waits
+skip-innodb_cmp_reset
+skip-innodb_cmpmem
+skip-innodb_cmpmem_reset
+skip-innodb_sys_indexes
+
+###########
+# replication
+
+server-id               = {{ 10000 |random(seed=inventory_hostname) }}
+log_bin                 = /var/log/mysql/mysql-bin.log
+expire_logs_days        = 7
+max_binlog_size         = 100M
+binlog_do_db            = toto_repl
+binlog_do_db            = anidb
+binlog_do_db            = arcscrape

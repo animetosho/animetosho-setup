@@ -1,0 +1,58 @@
+root /var/www/anito;
+access_log /var/log/nginx/access-main.log combined buffer=4k flush=1s;
+
+open_file_cache max=1000;
+open_file_cache_errors on;
+open_file_cache_valid 30s;
+
+
+location ~ ^/storage/ {
+	# mitigate nginx bug
+	rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6%%3F$7%%3F$8 permanent;
+	rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6%%3F$7 permanent;
+	rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6 permanent;
+	rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2%%3F$3%%3F$4%%3F$5 permanent;
+	rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2%%3F$3%%3F$4 permanent;
+	rewrite ^/storage/([^?]*)\?([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2%%3F$3 permanent;
+	rewrite ^/storage/([^?]*)\?(.*)$ $scheme://$site_storage_domain/$1%%3F$2 permanent;
+	
+	rewrite ^/storage/(.*)$ $scheme://$site_storage_domain/$1 permanent;
+	access_log off;
+	
+	add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload";
+	add_header X-Content-Type-Options "nosniff" always;
+	add_header Access-Control-Allow-Origin * always;
+	add_header Access-Control-Allow-Methods "HEAD, GET, OPTIONS" always;
+	add_header Access-Control-Max-Age 1209600 always;
+}
+location ~ ^/(inc)/ {
+	include snippets/static.conf;
+	location ~ \.php$ {
+		include snippets/fpm.conf;
+	}
+}
+location / {
+	location ~* ^/[^/]*\.(js|css|html|htm|xml|txt|ico|jpg|gif|jpeg|png)$ {
+		gzip_static on;
+		expires 7d;
+		# send file directly
+		access_log off;
+	}
+	
+	location ~ ^/((animes|episodes)($|\?)|series/|view/|file/) {
+		add_header Link "<https://$site_storage_domain/>; rel=dns-prefetch";
+		
+		include snippets/atphp;
+		limit_req zone=anitoIp burst=25;
+		limit_req zone=anitoIp2 burst=90 nodelay;
+		#limit_req zone=anitoIpUri burst=6 nodelay;
+	}
+	location / {
+		include snippets/atphp;
+		limit_req zone=anitoIp burst=25;
+		limit_req zone=anitoIp2 burst=90 nodelay;
+		#limit_req zone=anitoIpUri burst=6 nodelay;
+	}
+}
+error_page 404 = /404.html;
+#error_page 502 503 504  /50x.html;

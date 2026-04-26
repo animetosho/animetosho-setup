@@ -1,0 +1,27 @@
+rewrite ^/([a-z0-9A-Z%]+)/(.*)$ /index.php?action=$1&subaction=$2 break;
+rewrite ^/([a-z0-9A-Z%]+)$ /index.php?action=$1 break;
+rewrite ^/$ /index.php;
+
+strip on;
+add_header Content-Security-Policy "default-src 'none'; connect-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+#need to repeat this, cause nginx logic
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload";
+add_header X-Content-Type-Options "nosniff" always;
+add_header Onion-Location "http://{{ web_onion }}$request_uri" always;
+
+include snippets/fpm.conf;
+fastcgi_buffers 16 16k;
+fastcgi_max_temp_file_size 0;
+
+fastcgi_cache anito_fcgicache;
+fastcgi_cache_key "$scheme|$request_method|$host|${cookie_ant[theme]}|$request_uri";
+fastcgi_cache_valid 200 404 2m;
+#fastcgi_cache_valid 301 302 10m;
+fastcgi_cache_valid 301 302 400 500 0;
+fastcgi_ignore_headers Cache-Control;
+fastcgi_cache_min_uses 3;
+fastcgi_cache_use_stale timeout;
+fastcgi_no_cache "${cookie_ant[usertoken]}";
+fastcgi_cache_bypass "${cookie_ant[usertoken]}";

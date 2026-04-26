@@ -1,0 +1,53 @@
+fastcgi_cache_path /cache/nginx/mirror levels=1:2 keys_zone=mirror_cache:10m inactive=15m max_size=100m;
+
+# redirects
+server {
+	listen 80 so_keepalive=off;
+	listen [::]:80 so_keepalive=off;
+	server_name {{ mirror_hostname }};
+	add_header X-Robots-Tag none always;
+	add_header Cache-Control "no-cache, must-revalidate";
+	
+	location ~ ^/feed/ {
+		rewrite ^/feed/(.*) $scheme://{{ feed_hostname }}/$1 permanent;
+		access_log off;
+	}
+	location ~ ^/storage/ {
+		# mitigate nginx bug
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6%%3F$7%%3F$8 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6%%3F$7 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3 permanent;
+		rewrite ^/storage/([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2 permanent;
+		
+		rewrite ^/storage/(.*)$ $scheme://{{ storage_hostname }}/$1 permanent;
+		access_log off;
+	}
+	
+	location / {
+		rewrite ^/(.*) https://{{ web_hostname }}/$1 redirect;
+	}
+	location ~ ^/.well-known { root /var/www; }
+	access_log off;
+}
+server {
+	listen 443 ssl so_keepalive=off;
+	listen [::]:443 ssl so_keepalive=off;
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ mirror_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ mirror_hostname }}/privkey.pem;
+	
+	server_name {{ mirror_hostname }};
+	add_header X-Robots-Tag none always;
+	add_header Cache-Control "no-cache, must-revalidate";
+	location ~ ^/feed/ {
+		rewrite ^/feed/(.*) $scheme://{{ feed_hostname }}/$1 permanent;
+		access_log off;
+	}
+	location / {
+		rewrite ^/(.*) https://{{ web_hostname }}/$1 redirect;
+	}
+	access_log off;
+}

@@ -1,0 +1,31 @@
+
+# versions based on what's in APT - below corresponds with Debian 13
+php_ver: 8.4
+libav_ver: 61
+libavutil_ver: 59
+
+# latest versions at time of writing
+nginx_ver: 1.28.3
+zlibng_ver: 2.3.3
+mozjpeg_ver: 4.1.1
+
+# server addresses
+backup_host:  163.172.88.174    # DB backups are sent to this server (we use the storage server)
+updates_host: 195.154.225.179   # front end connects to backend nginx/MySQL here
+storage_host: 163.172.88.174    # backend syncs storage files to this host
+
+# server hostnames
+web_hostname: animetosho.org
+web_ip4_hostname: ipv4.animetosho.org
+web_ip6_hostname: ipv6.animetosho.org
+storage_hostname: storage.animetosho.org
+feed_hostname: feed.animetosho.org
+cache_hostname: cache.animetosho.org
+mirror_hostname: mirror.animetosho.org
+# Tor hosts
+web_onion: rozvtgjhfwfrf4xbbhqevgwia6ut3twhcv3kxspqnklekojyoskcfryd.onion
+storage_onion: storage.2dhhlhbqpcgkros3mddwq7tuhhiaubjydejoy6npa3rn7snsofq3qjyd.onion
+
+
+# set the following to one of sse4/avx/avx2 depending on what the storage server's CPU supports
+storage_encodeframe_isa: avx2

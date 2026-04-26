@@ -1,0 +1,102 @@
+resolver 8.8.8.8 8.8.4.4 valid=900s;
+resolver_timeout 8s;
+
+proxy_cache_path /cache/nginx/adbpics levels=1:2 keys_zone=adbpics_cache:16m inactive=180d max_size=4096m;
+upstream https_adbpics {
+	server cdn-eu.anidb.net:443;
+	keepalive 2;
+}
+
+uwsgi_temp_path /cache/nginx/uwsgi;
+uwsgi_max_temp_file_size 0;
+uwsgi_cache_path /cache/nginx/sframes levels=1:2 keys_zone=sframes_cache:32m inactive=18h max_size=1024m;
+uwsgi_cache_path /cache/nginx/sframes_full levels=1:2 keys_zone=sframes_full_cache:10m inactive=2d max_size=8192m;
+
+map $http_user_agent $meta_crawler {
+	default "";
+	"~^meta-externalagent/" 1;
+	"~ Amazonbot/" 2;
+	"~^Googlebot-Image/" 3;
+	"~ GPTBot/" 4;
+	"~ PetalBot;" 5;
+	"~ AhrefsBot/" 6;
+	"~\(Applebot/" 7;
+	"~ Baiduspider-render/" 8;
+	"~ Bytespider;" 9;
+	"~ DotBot/" 10;
+	"~ \(Macintosh; Intel Mac OS X 10_11_3\) .* Chrome/60\.0\.3112\.113 " 11; # some AWS bot (shortened from "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.113 Safari/537.36" to fit in hash bucket)
+	"~ ClaudeBot/1\.0;" 12;
+	"~ Barkrowler/" 13;
+	"~ DataForSeoBot/" 14;
+}
+
+limit_req_zone $meta_crawler zone=sframeIp:4m rate=8r/m;
+limit_req_zone $binary_remote_addr zone=sframeIp2:4m rate=20r/m;
+
+
+server {
+	include snippets/stsite;
+
+	listen 443 ssl http2;
+	listen [::]:443 ssl http2;
+	server_name {{ storage_hostname }};
+
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ storage_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ storage_hostname }}/privkey.pem;
+}
+
+server {
+	include snippets/stsite;
+	listen 127.0.0.1:80;
+	server_name {{ storage_onion }};
+}
+
+
+# redirects
+server {
+	listen 80;
+	listen [::]:80;
+	server_name {{ storage_hostname }};
+	expires epoch;
+	add_header X-Content-Type-Options "nosniff" always;
+	add_header Access-Control-Allow-Origin * always;
+	add_header Access-Control-Allow-Methods "HEAD, GET, OPTIONS" always;
+	add_header Access-Control-Max-Age 1209600 always;
+	location / {
+		rewrite ^/(.*) https://{{ storage_hostname }}/$1 permanent;
+	}
+
+	#workarounds for old clients which don't support HTTPS
+	location ~ ^/torrent/ {
+		root /storage/storage;
+		rewrite ^/torrents?/([a-f0-9][a-f0-9][a-f0-9])([a-f0-9]*)/([^/]*\.torrent)$ /torrents/$1/$2.torrent break;
+		types {
+			application/x-bittorrent torrent;
+		}
+		expires 7d;
+	}
+	location ~ ^/nzbs/.*\.nzb\.gz$ {
+		root /storage/storage;
+		rewrite ^/nzbs?/([a-f0-9][a-f0-9][a-f0-9])([a-f0-9][a-f0-9][a-f0-9])([a-f0-9][a-f0-9])/([^/]*\.nzb\.gz)$ /nzb/$1/$2/$3.nzb.gz break;
+		types {
+			application/x-gzip gz;
+		}
+		expires 7d;
+	}
+	location ~ ^/nzbs/.*\.nzb$ {
+		root /storage/storage;
+		rewrite ^/nzbs?/([a-f0-9][a-f0-9][a-f0-9])([a-f0-9][a-f0-9][a-f0-9])([a-f0-9][a-f0-9])/([^/]*\.nzb)$ /nzb/$1/$2/$3.nzb break;
+		gzip_static always;
+		gunzip on;
+		types {
+			application/x-nzb nzb;
+		}
+		expires 7d;
+	}
+
+	location ~ ^/.well-known { root /var/www; }
+
+	access_log /var/log/nginx/access-storage-http.log combined buffer=4k flush=1s;
+	error_log /var/log/nginx/error-storage-http.log warn;
+}

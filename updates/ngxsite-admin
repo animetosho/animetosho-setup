@@ -1,0 +1,40 @@
+server {
+listen unix:/var/run/nginx-admin.sock;
+server_name _;
+root /var/www/admin;
+
+gzip             on;
+gzip_types       text/plain text/css application/json application/x-javascript text/xml application/xml application/xml+rss text/javascript;
+gzip_vary        on;
+gzip_comp_level  4;
+
+
+location = / {
+	index index.php;
+}
+
+location ^~ /transmission/web/ {
+	proxy_pass http://127.0.0.1:9881/transmission/web/;
+	proxy_set_header Authorization "Basic {{ ('anito:' ~ pwd.updates_transmission) | b64encode }}";
+}
+
+location ^~ /transmission/ {
+	rewrite ^/transmission(/rpc.*?)(\?.*)?$ /transmission.php?_url=$1&$2;
+	fastcgi_pass unix:/run/php/php{{ php_ver }}-fpm.sock;
+	include fastcgi.conf;
+}
+
+location ~* \.(js|css|html|htm|txt|ico|gif|jpg|png)$ {
+	gzip_static on;
+	expires 7d;
+	# send file directly
+}
+location / {
+	fastcgi_pass unix:/run/php/php{{ php_ver }}-fpm.sock;
+	fastcgi_index index.php;
+	fastcgi_connect_timeout 90s;
+	fastcgi_read_timeout 90s;
+	
+	include fastcgi.conf;
+}
+}

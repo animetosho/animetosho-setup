@@ -1,0 +1,13 @@
+[Service]
+ExecStart=/usr/bin/spiped -e -n 20 -F -k - -s '[127.0.0.1]:7336' -t '[{{ updates_host }}]:7336'
+Restart=always
+UMask=0000
+StandardInput=file:/etc/spiped/mysql.key
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spiped
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

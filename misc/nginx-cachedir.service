@@ -1,0 +1,12 @@
+[Unit]
+Description=Create NGINX cache directory in /dev/shm
+Before=nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/mkdir -p /dev/shm/nginx/fastcgi /dev/shm/nginx/feed
+ExecStart=/bin/chown www-data:root /dev/shm/nginx -R
+ExecStart=/bin/chmod 0700 /dev/shm/nginx -R
+
+[Install]
+WantedBy=multi-user.target

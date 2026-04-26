@@ -1,0 +1,21 @@
+--- src/imwri.cpp
++++ src/imwri.cpp
+@@ -277,8 +277,15 @@
+         try {
+             Magick::Image image(Magick::Geometry(width, height), Magick::Color(0, 0, 0, 0));
+             image.magick(d->imgFormat);
+             image.modulusDepth(fi->bitsPerSample);
+-            if (d->compressType != MagickCore::UndefinedCompression)
+-                image.compressType(d->compressType);
++            if (d->compressType != MagickCore::UndefinedCompression) {
++                // ugly hack for disabling PNG compression
++                std::string ifmt = d->imgFormat;
++                std::transform(ifmt.begin(), ifmt.end(), ifmt.begin(), toupper);
++                if (d->compressType == MagickCore::NoCompression && ifmt == "PNG")
++                    image.defineValue("png", "compression-level", "0");
++                else
++                    image.compressType(d->compressType);
++            }
+             image.quantizeDitherMethod(Magick::FloydSteinbergDitherMethod);
+             image.quantizeDither(d->dither);
+             image.quality(d->quality);

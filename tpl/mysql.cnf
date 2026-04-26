@@ -1,0 +1,103 @@
+[client]
+skip-ssl
+#default-character-set  = utf8mb4
+
+
+[server]
+skip-name-resolve
+skip-log-bin
+skip-external-locking
+character_set_server   = utf8mb4
+collation_server       = utf8mb4_general_ci
+
+
+max_connections         = 40
+connect_timeout         = 15
+wait_timeout            = 30
+interactive_timeout     = 120
+
+#thread_concurrency      = 2
+max_allowed_packet      = 4M
+#thread_cache_size       = 8 #ignored with thread pools anyway
+sort_buffer_size        = 512K
+bulk_insert_buffer_size = 512K
+tmp_table_size          = 4M
+max_heap_table_size     = 8M
+join_buffer_size        = 256K
+thread_stack            = 192K
+net_buffer_length       = 64K
+
+myisam_recover          = BACKUP,FORCE
+aria_recover            = BACKUP
+key_buffer_size         = 64K #only affect MyISAM
+table_open_cache        = 1000
+myisam_sort_buffer_size = 512K
+concurrent_insert       = 2
+read_buffer_size        = 128K
+read_rnd_buffer_size    = 512K
+
+aria_pagecache_buffer_size = 600M
+aria_sort_buffer_size = 8M
+
+aria_log_file_size = 64M
+
+query_cache_type                = 0
+query_cache_limit               = 192K
+query_cache_size                = 0
+#check that this isn't overridden in /etc/mysql/mariadb.conf/50-server.cnf
+
+
+slow_query_log          = 1 #[={0|1}]
+slow_query_log_file     = /var/log/mysql/mariadb-slow.log
+long_query_time         = 10
+#log_slow_rate_limit    = 1000
+log_slow_verbosity      = query_plan
+
+
+log_error               = /var/log/mysql/error.log
+# for if we ever want to log all queries
+general_log             = 0
+general_log_file        = /var/log/mysql/mysql.log
+
+
+default_storage_engine  = Aria
+
+# skip plugins
+
+skip-innodb
+skip-innodb_cmp_per_index_reset
+skip-innodb_buffer_page_lru
+skip-innodb_buffer_pool_stats
+skip-innodb_metrics
+skip-innodb_ft_default_stopword
+skip-innodb_ft_deleted
+skip-innodb_ft_being_deleted
+skip-innodb_ft_config
+skip-innodb_ft_index_cache
+skip-innodb_ft_index_table
+skip-innodb_sys_tablestats
+skip-innodb_sys_columns
+skip-innodb_sys_fields
+skip-innodb_sys_foreign_cols
+skip-innodb_sys_tablespaces
+skip-innodb_trx
+skip-innodb_lock_waits
+skip-innodb_cmp_reset
+skip-innodb_cmpmem
+skip-innodb_cmpmem_reset
+skip-innodb_sys_indexes
+
+skip-performance_schema  # doesn't work
+skip-ssl
+
+server-id = {{ 10000 |random(seed=inventory_hostname) }}
+init_slave = 'SET LOW_PRIORITY_UPDATES=1, LONG_QUERY_TIME=30'
+
+slave_compressed_protocol=1
+slave_sql_verify_checksum=0
+slave_net_timeout=1200
+report-host={{ inventory_hostname }}
+relay_log_recovery = 1
+relay_log = mysqld-relay-bin
+
+net_retry_count = 0

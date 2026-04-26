@@ -1,0 +1,29 @@
+[Service]
+Restart=always
+Nice=1
+LimitNOFILESoft=8192
+LimitNOFILE=16384
+
+# hardening from https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/services/torrent/transmission.nix
+LockPersonality=true
+MemoryDenyWriteExecute=true
+PrivateDevices=true
+PrivateMounts=true
+PrivateNetwork=false
+PrivateTmp=true
+#PrivateUsers=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=true
+RemoveIPC=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+ExecStart=
+ExecStart=/usr/bin/transmission-daemon -f --log-level=error --logfile /var/log/transmission-daemon.log

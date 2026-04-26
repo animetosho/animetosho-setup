@@ -1,0 +1,27 @@
+
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  tasks:
+  # this is unused on the storage server; don't do this if storage is also serving other stuff
+  - name: stop php-fpm
+    service:
+      name: php{{ php_ver }}-fpm
+      state: stopped
+      enabled: no
+
+  - name: disable replication for unneeded DBs
+    blockinfile:
+      dest: '/etc/mysql/conf.d/custom.cnf'
+      insertafter: EOF
+      content: |
+        replicate_ignore_db = arcscrape
+        replicate_ignore_db = anidb
+  - name: apply mysql settings
+    service:
+      name: mysql
+      state: restart
+  # TODO: consider blackholing some toto_repl tables, and reduce memory consumption of MySQL
+  

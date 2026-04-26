@@ -1,0 +1,884 @@
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  - keys/passwords.yml
+  tasks:
+  - name: install systemd-resolved
+    apt:
+      name: systemd-resolved
+      state: present
+  - name: configure systemd-resolved resolver
+    lineinfile:
+      dest: /etc/systemd/resolved.conf
+      regex: '{{ item.regex }}'
+      line: '{{ item.line }}'
+    with_items:
+      - { regex: '^#?DNS=', line: 'DNS=1.1.1.1 1.0.0.1 2606:4700:4700::1111 2606:4700:4700::1001' }
+      - { regex: '^#?DNSSEC=', line: 'DNSSEC=no' }  # DNSSEC makes IPv6 resolution slower?? have seen a case where IPv6 isn't being cached, where disabling DNSSEC seems to sometimes have a speed up
+      - { regex: '^#?MulticastDNS=', line: 'MulticastDNS=no' }
+      - { regex: '^#?LLMNR=', line: 'LLMNR=no' }
+  - name: enable systemd-resolved
+    systemd:
+      name: systemd-resolved
+      enabled: yes
+      state: restarted
+  - name: link stub resolv.conf
+    file:
+      dest: /etc/resolv.conf
+      src: /run/systemd/resolve/stub-resolv.conf
+      state: link
+      force: yes
+  
+  - name: get main code
+    git:
+      repo: https://github.com/animetosho/{{ item.repo }}.git
+      dest: '{{ item.dst }}'
+      force: no
+    with_items:
+    - { repo: animetosho-updater, dst: /var/atscript }
+    - { repo: anidb-tcp-client, dst: /var/anidb_tcp }
+    - { repo: anidb-http-client, dst: /var/anidb_http }
+    register: code_clone
+    ignore_errors: yes
+    failed_when:
+    - code_clone.failed
+    - not 'Local modifications exist in ' in (code_clone.msg | default(''))
+  - name: ensure shell scripts are executable
+    shell: chmod a+x /var/atscript/includes/*.sh /var/atscript/*.sh /var/atscript/news/*.sh /var/atscript/support/*.sh
+    when: code_clone.changed
+  
+  - name: create atscript user
+    user:
+      create_home: yes
+      name: atscript
+  - name: atscript script root
+    file:
+      path: '/var/atscript'
+      owner: root
+      group: atscript
+      mode: '710'
+      state: directory
+  - name: atscript script directories
+    file:
+      path: '/var/atscript/{{ item }}'
+      state: directory
+    with_items:
+    - '3rdparty'
+    - 'admin_www'
+  - name: atscript processing directories
+    file:
+      path: '/atdata/{{ item.dir }}'
+      mode: '{{ item.mode }}'
+      owner: root
+      group: atscript
+      state: directory
+    with_items:
+    - { dir: '', mode: '711' }
+    - { dir: 'finfo', mode: '775' }
+    - { dir: 'news', mode: '775' }
+    - { dir: 'nntpdump', mode: '775' }
+    - { dir: 'nntpdump-fail', mode: '775' }
+    - { dir: 'tmp', mode: '775' }
+    - { dir: 'dbbak', mode: '700' }
+    - { dir: 'torrents', mode: '777' }
+    - { dir: 'ulqueue', mode: '775' }
+  - name: storage root
+    file:
+      path: '/storage'
+      state: directory
+  - name: storage directories
+    file:
+      path: '/storage/storage/{{ item.dir }}'
+      owner: root
+      group: atscript
+      mode: '{{ item.mode }}'
+      state: directory
+    with_items:
+    - { dir: '', mode: '711' }
+    - { dir: 'sshots', mode: '775' }
+    - { dir: 'attachments', mode: '775' }
+    - { dir: 'nzb', mode: '775' }
+    - { dir: 'torrents', mode: '775' }
+    - { dir: 'sframes', mode: '775' }
+    - { dir: 'dbexport', mode: '755' }
+    - { dir: 'anidex_archive', mode: '775' }
+    - { dir: 'nekobt_archive', mode: '775' }
+    - { dir: 'nyaasi_archive', mode: '775' }
+    - { dir: 'nyaasis_archive', mode: '775' }
+  - name: storage web root
+    unarchive:
+      src: misc/storage_root.tar
+      copy: yes
+      dest: /storage/storage
+  
+  - name: enable TCP BBR
+    copy:
+      dest: /etc/sysctl.d/10-custom-kernel-bbr.conf
+      content: |
+        net.core.default_qdisc=fq
+        net.ipv4.tcp_congestion_control=bbr
+  - name: kernel tweaks
+    sysctl:
+      reload: yes
+      state: present
+      name: '{{ item.name }}'
+      value: '{{ item.value }}'
+    with_items:
+    - { name: 'net.core.rmem_max', value: 8388608 }
+    - { name: 'net.core.wmem_max', value: 4194304 }
+    # needed for lsyncd
+    - { name: 'fs.inotify.max_user_watches', value: 100000 }
+    - { name: 'fs.inotify.max_queued_events', value: 100000 }
+  
+  - name: install systemd-coredump
+    apt:
+      name: systemd-coredump
+      state: present
+  - name: keep coredumps for longer
+    lineinfile:
+      dest: /usr/lib/tmpfiles.d/systemd.conf
+      regexp: '^d \/var\/lib\/systemd\/coredump 0755 root root \d+d$'
+      line: 'd /var/lib/systemd/coredump 0755 root root 14d'
+  
+  - name: download Mediainfo repo DEB
+    get_url:
+      url: 'https://mediaarea.net/repo/deb/repo-mediaarea_1.0-26_all.deb'
+      dest: '/root/setup/repo-mediaarea.deb'
+    when: ansible_distribution_version != 'testing'
+    register: mediainfo_deb
+  - name: add Mediainfo repo
+    apt:
+      deb: '{{ mediainfo_deb.dest }}'
+    when: mediainfo_deb.changed
+  
+  
+  - name: install python-debian  # required by Ansible's deb822_repository
+    apt:
+      name: python3-debian
+      state: present
+  - name: Add DebMultimedia key
+    apt:
+      deb: http://www.deb-multimedia.org/pool/main/d/deb-multimedia-keyring/deb-multimedia-keyring_2024.9.1_all.deb
+      allow_unauthenticated: yes
+  - name: add DebMultimedia repo
+    deb822_repository:
+      name: multimedia
+      types: [deb, deb-src]
+      uris: http://www.deb-multimedia.org
+      components: main
+      suites: ['{{ ansible_distribution_release }}', '{{ ansible_distribution_release }}-backports']
+      enabled: yes
+  
+  - name: download mkvtoolnix key
+    get_url:
+      url: 'https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg'
+      dest: '/usr/share/keyrings/gpg-pub-moritzbunkus.gpg'
+  - name: add mkvtoolnix repo
+    deb822_repository:
+      name: mkvtoolnix
+      types: [deb, deb-src]
+      uris: https://mkvtoolnix.download/debian/
+      components: main
+      suites: '{{ ansible_distribution_release }}'
+      signed_by: /usr/share/keyrings/gpg-pub-moritzbunkus.gpg
+      enabled: yes
+    when: ansible_distribution_version != 'testing'
+  
+  - name: install multimedia utils
+    apt:
+      update_cache: yes
+      name:
+      - mediainfo
+      - mkvtoolnix
+      - ffmpeg
+      - gpac
+      - webp
+      state: present
+  - name: install AdvanceCOMP
+    apt:
+      name: advancecomp
+      state: present
+  
+  - name: install Transmission-common
+    apt:
+      name: transmission-common
+      state: present
+  - name: install Transmission-daemon
+    apt:
+      name: transmission-daemon
+      state: present
+      install_recommends: no
+  - name: remove minissdpd if present
+    apt:
+      name: minissdpd
+      state: absent
+  - name: Transmission service override dir
+    file:
+      dest: /etc/systemd/system/transmission-daemon.service.d
+      state: directory
+  - name: Transmission service conf
+    copy:
+      dest: /etc/systemd/system/transmission-daemon.service.d/override.conf
+      src: 'updates/transmission.service.override'
+  - name: Transmission error log
+    file:
+      path: /var/log/transmission-daemon.log
+      state: touch
+      owner: debian-transmission
+      group: debian-transmission
+  - name: reload systemctl & stop transmission
+    systemd:
+      daemon_reload: yes
+      name: transmission-daemon
+      state: stopped
+  - name: copy Transmission config
+    template:
+      src: 'updates/transmission-settings.json'
+      dest: /etc/transmission-daemon/settings.json
+  - name: start transmission
+    systemd:
+      name: transmission-daemon
+      state: started
+  - name: copy Transmission logrotate
+    copy:
+      dest: /etc/logrotate.d/transmission-daemon
+      src: 'updates/logrotate-transmission'
+  
+  - name: install aria2
+    apt:
+      name: aria2
+      state: present
+  
+  - name: "install PHP extensions"
+    apt:
+      name:
+      - "php{{ php_ver }}-tidy"
+      - "php{{ php_ver }}-xml"
+      - "php{{ php_ver }}-bcmath"
+      state: present
+    register: php_mods2
+  - name: configure PHP modules
+    command: '/usr/sbin/php{{ item }}'
+    with_items:
+    - dismod -s fpm tidy
+    - enmod -s fpm curl  # admin_www for pushing torrents
+    when: php_mods2.changed
+  - name: PHP conf (FPM)
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/php.ini'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?opcache\.memory_consumption ?=',  line: 'opcache.memory_consumption=8'}
+    - { regexp: '^;?display_errors ?=',  line: 'display_errors = On'}
+    - { regexp: '^;?allow_url_fopen ?=',       line: 'allow_url_fopen = On'}  # needed by transmission admin page
+  - name: PHP conf (CLI)
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/cli/php.ini'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?display_errors ?=',  line: 'display_errors = On'}
+    - { regexp: '^;?memory_limit ?=',  line: 'memory_limit = 128M'}
+    - { regexp: '^;?mysqli\.reconnect ?=',  line: 'mysqli.reconnect = On'}
+  - name: PHP conf (CLI log)
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/cli/php.ini'
+      insertafter: '^;?error_log ?='
+      line: 'error_log=/var/log/php{{ php_ver }}-cli.err'
+  - name: PHP CLI error log file
+    file:
+      path: /var/log/php{{ php_ver }}-cli.err
+      state: touch
+      mode: '600'
+      owner: atscript
+      group: atscript
+  - name: PHP CLI logrotate for errors
+    template:
+      src: updates/php-cli-logrotate.j2
+      dest: /etc/logrotate.d/php{{ php_ver }}-cli-err
+  
+  - name: PHP FPM conf
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/pool.d/www.conf'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?pm ?=',      line: 'pm = ondemand' }
+    - { regexp: '^;?pm\.max_children',      line: 'pm.max_children = 3' }
+    - { regexp: '^;?pm\.start_servers',     line: 'pm.start_servers = 1' }  # only for pm=dynamic
+    - { regexp: '^;?pm\.min_spare_servers', line: 'pm.min_spare_servers = 1' }  # only for pm=dynamic
+    - { regexp: '^;?pm\.max_spare_servers', line: 'pm.max_spare_servers = 1' }  # only for pm=dynamic
+    - { regexp: '^;?pm\.process_idle_timeout', line: 'pm.process_idle_timeout = 60s' }
+    - { regexp: '^;?group', line: 'group = atscript' }
+  - name: restart php-fpm
+    service:
+      name: php{{ php_ver }}-fpm
+      state: restarted
+  
+  # prep php-dev
+  - name: PHP custom module deps
+    apt:
+      name:
+      - php{{ php_ver }}-dev
+      - pkg-config
+      - libssl-dev
+      state: present
+  # PHP addons
+  - name: get php-openssl-incremental
+    git:
+      repo: https://github.com/zingaburga/php-openssl-incremental.git
+      dest: /root/setup/php-openssl-incremental
+    register: php_openssl
+  - name: get php-atext
+    git:
+      repo: https://github.com/animetosho/uploader-php-ext.git
+      dest: /root/setup/php-atext
+    register: php_atext
+  - name: build & install openssl-incremental
+    shell: phpize && ./configure && make -j2 && make install
+    args:
+      chdir: /root/setup/php-openssl-incremental
+    when: php_openssl.changed
+  - name: build & install atext
+    shell: phpize && ./configure && make -j2 && make install
+    args:
+      chdir: /root/setup/php-atext
+    when: php_atext.changed
+  - name: custom PHP module configs
+    copy:
+      dest: /etc/php/{{ php_ver }}/mods-available/{{ item }}.ini
+      content: extension={{ item }}.so
+    with_items:
+    - openssl_incr
+    - atext
+    register: php_cust_mod
+  - name: enable custom PHP modules
+    command: '/usr/sbin/phpenmod -s cli openssl_incr atext'
+    when: php_cust_mod.changed
+  
+  - name: create DBs
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name:
+      - toto
+      state: present
+  - name: mysql config
+    template:
+      src: updates/mariadb-custom.cnf
+      dest: /etc/mysql/conf.d/custom.cnf
+    register: mysql_conf
+  - name: restart mysql
+    service:
+      name: mysql
+      state: restarted
+    when: mysql_conf.changed
+  - name: remove InnoDB files
+    file:
+      path: '/var/lib/mysql/{{ item }}'
+      state: absent
+    with_items:
+    - ib_buffer_pool
+    - ibdata1
+    - ib_logfile0
+    - ib_logfile1
+  - name: setup mysql users
+    mysql_user:
+      name: '{{ item.name }}'
+      password: '{{ item.password }}'
+      priv: '{{ item.priv }}'
+      host: localhost
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+    with_items:
+    - { name: toto, password: '{{ pwd.updates_mysql_toto }}', priv: 'anidb.*:SELECT/arcscrape.*:SELECT,INSERT,UPDATE,DELETE/toto.*:SELECT,INSERT,UPDATE,DELETE,LOCK TABLES/toto_repl.*:SELECT,INSERT,UPDATE,DELETE,LOCK TABLES' }
+    - { name: anidb_tcp, password: '{{ pwd.updates_mysql_adbtcp }}', priv: 'anidb.*:SELECT,INSERT,UPDATE,DELETE' }
+    - { name: toto_repl, password: '{{ pwd.updates_mysql_repl }}', priv: '*.*:REPLICATION SLAVE' }
+    - { name: backup, password: '{{ pwd.updates_mysql_backup }}', priv: '*.*:SELECT,RELOAD,LOCK TABLES,REPLICATION CLIENT' }
+  
+  - name: disable nginx default site
+    file:
+      path: /etc/nginx/sites-enabled/default
+      state: absent
+  - name: nginx sites
+    template:
+      src: 'updates/ngxsite-{{ item }}'
+      dest: '/etc/nginx/sites-enabled/{{ item }}'
+    with_items:
+    - admin
+  - name: nginx admin webroot link
+    file:
+      src: /var/atscript/admin_www/
+      dest: /var/www/admin
+      state: link
+      mode: '755'
+  - name: nginx config
+    lineinfile:
+      dest: /etc/nginx/nginx.conf
+      regex: '{{ item.regex }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regex: '^worker_processes ', line: 'worker_processes 1;' }
+    - { regex: '^user ', line: 'user www-data atscript;' }
+  - name: restart nginx
+    service:
+      name: nginx
+      state: restarted
+  
+  - name: install Vapoursynth
+    apt:
+      name:
+      - vapoursynth
+      - vapoursynth-imwri
+      - vapoursynth-subtext
+      state: present
+  
+  - name: ensure known_hosts exists for root
+    file:
+      dest: /root/.ssh/known_hosts
+      state: touch
+      mode: '600'
+  
+  - name: install lsyncd
+    apt:
+      name: lsyncd
+      state: present
+  - name: disable lsyncd service  # needs to be manually enabled
+    systemd:
+      name: lsyncd
+      enabled: no
+      state: stopped
+  - name: lsyncd folder
+    file:
+      dest: /etc/lsyncd
+      state: directory
+  - name: lsync config
+    template:
+      src: updates/lsyncd.conf
+      dest: /etc/lsyncd/lsyncd.conf.lua
+      mode: '600'
+  - name: lsync key
+    copy:
+      dest: /etc/lsyncd/lsync.pwd
+      content: '{{ pwd.storage_rsync }}'
+      mode: '600'
+  - name: lsync logrotate
+    copy:
+      dest: /etc/logrotate.d/lsyncd
+      src: 'updates/logrotate-lsyncd'
+  
+  
+  - name: anime-lists dir
+    file:
+      path: '/var/atscript/anidb_mapping'
+      state: directory
+      owner: atscript
+  - name: clone TVDB anime-lists
+    git:
+      repo: https://github.com/Anime-Lists/anime-lists.git
+      dest: /var/atscript/anidb_mapping/
+    become: yes
+    become_user: atscript
+    become_method: su
+  
+  - name: install nodejs
+    apt:
+      name:
+      - nodejs
+      - npm
+      state: present
+  - name: install node modules
+    apt:
+      name:
+      - node-async
+      - node-log4js
+      - node-gyp
+      - node-xml2js
+      - node-mysql
+      state: present
+  - name: install gzbz2 deps
+    apt:
+      name:
+      - libbz2-dev
+      - libz-dev
+      state: present
+  
+  # Nyuu/ParPar
+  - name: get ParPar URL
+    command: npm view @animetosho/parpar dist.tarball
+    register: parpar_url
+  - name: download ParPar
+    get_url:
+      url: '{{ parpar_url.stdout }}'
+      dest: '/root/setup/parpar.txz'
+    register: parpar_download
+  - name: extract ParPar
+    unarchive:
+      src: '{{ parpar_download.dest }}'
+      copy: no
+      dest: /var/atscript/3rdparty
+    register: parpar_extracted
+    when: parpar_download.changed
+  - name: move ParPar
+    command: mv /var/atscript/3rdparty/package /var/atscript/3rdparty/parpar
+    args:
+      creates: /var/atscript/3rdparty/parpar
+    when: parpar_extracted.changed
+  - name: build ParPar
+    command: node-gyp rebuild
+    args:
+      chdir: /var/atscript/3rdparty/parpar
+    when: parpar_extracted.changed
+  - name: get Nyuu URL
+    command: npm view nyuu dist.tarball
+    register: nyuu_url
+  - name: download Nyuu
+    get_url:
+      url: '{{ nyuu_url.stdout }}'
+      dest: '/root/setup/nyuu.txz'
+    register: nyuu_download
+  - name: install Nyuu
+    unarchive:
+      src: '{{ nyuu_download.dest }}'
+      copy: no
+      dest: /var/atscript/3rdparty
+    register: nyuu_extracted
+    when: nyuu_download.changed
+  - name: move Nyuu
+    command: mv /var/atscript/3rdparty/package /var/atscript/3rdparty/nyuu
+    args:
+      creates: /var/atscript/3rdparty/nyuu
+    when: nyuu_extracted.changed
+  - name: install yencode
+    npm:
+      name: yencode
+      path: /root/setup/npmtmp
+      production: yes
+      global: no
+    register: npm_yencode
+  - name: place yencode
+    command: mv /root/setup/npmtmp/node_modules /var/atscript/3rdparty/nyuu/node_modules
+    args:
+      creates: /var/atscript/3rdparty/nyuu/node_modules
+    when: npm_yencode.changed
+  
+  - name: install php-vnstat
+    git:
+      repo: https://github.com/logicalshrapnel/vnstat-php.git
+      dest: /var/atscript/admin_www/vnstat
+  
+  
+  - name: install firejail
+    apt:
+      name: firejail
+      state: present
+      install_recommends: no
+  - name: install firejail-profiles
+    apt:
+      name: firejail-profiles
+      state: present
+  - name: additional firejail profiles
+    shell: 'sed s/{{ item.from }}/{{ item.app }}/ /etc/firejail/{{ item.from }}.profile > /etc/firejail/{{ item.app }}.profile'
+    args:
+      creates: '/etc/firejail/{{ item.app }}.profile'
+    with_items:
+    - { from: 'mediainfo', app: 'MP4Box' }
+  - name: configure firejail
+    lineinfile:
+      dest: /etc/firejail/firejail.config
+      regex: '{{ item.regex }}'
+      line: '{{ item.line }}'
+    with_items:
+      - { regex: '^#?quiet-by-default ', line: 'quiet-by-default yes' }
+      - { regex: '^#?join-timeout ', line: 'join-timeout 30' }  # never triggered a timeout, but just in case
+    register: firejail_conf
+  - name: run firecfg
+    command: firecfg
+    when: firejail_conf.changed
+  - name: add users to firejail
+    lineinfile:
+      dest: /etc/firejail/firejail.users
+      line: '{{ item }}'
+    with_items:
+    - atscript
+    #- debian-transmission
+  
+  - name: install parallel
+    apt:
+      name: parallel
+      state: present
+  - name: suppress parallel citation (1)
+    file:
+      path: /home/atscript/.parallel
+      state: directory
+      owner: atscript
+      group: atscript
+  - name: suppress parallel citation (2)
+    file:
+      path: /home/atscript/.parallel/will-cite
+      state: touch
+      owner: atscript
+      group: atscript
+  
+  - name: security limits
+    blockinfile:
+      dest: '/etc/security/limits.conf'
+      insertafter: EOF
+      block: |
+        debian-transmission soft nofile 8192
+        debian-transmission hard nofile 16384
+        
+        atscript - nice -10
+        atscript - core 16777216
+  
+  - name: create spiped services
+    template:
+      src: 'updates/{{ item }}.service'
+      dest: '/etc/systemd/system/{{ item }}.service'
+    with_items:
+    - spiped-mysql4
+    - spiped-mysql6
+    - spiped-nginx4
+    - spiped-nginx6
+    - spiped-rsync
+  - name: spiped rsync key
+    copy:
+      src: 'keys/spipe-{{ item }}.key'
+      dest: '/etc/spiped/{{ item }}.key'
+      mode: '600'
+    with_items:
+    - rsyncd
+  - name: enable spiped IPv4 service
+    systemd:
+      name: '{{ item }}'
+      daemon_reload: yes
+      enabled: yes
+      state: started
+    with_items:
+    - spiped-mysql4
+    - spiped-nginx4
+    - spiped-rsync
+  - name: disable spiped IPv6 service
+    systemd:
+      name: '{{ item }}'
+      enabled: no
+      state: stopped
+    with_items:
+    - spiped-mysql6
+    - spiped-nginx6
+  
+  - name: DB backup folder
+    file:
+      path: /root/dbbak
+      state: directory
+  - name: DB backup script
+    template:
+      src: 'updates/dbbak.sh'
+      dest: '/root/dbbak/bak.sh'
+      mode: '755'
+  - name: DB dump PHP script
+    template:
+      src: 'updates/dbquery.php'
+      dest: '/root/dbbak/dbquery.php'
+  - name: DB export readme PHP script
+    copy:
+      src: 'updates/dbexport-readme.php'
+      dest: '/root/dbbak/dbexport.php'
+  - name: DB backup key
+    copy:
+      dest: /root/dbbak/bak.key
+      mode: '600'
+      src: 'keys/backup.pem'
+  - name: mysqlhotcopy patch for aria tables
+    replace:
+      path: /usr/bin/mariadb-hotcopy
+      regexp: MYI(\|MAI)?
+      replace: 'MYI|MAI'
+  
+  - name: configure updater
+    lineinfile:
+      dest: /var/atscript/includes/config.php
+      regex: '{{ item.regex }}'
+      line: '{{ item.line }}'
+    with_items:
+      - { regex: "'dbpassword' => '.*',", line: "'dbpassword' => '{{ pwd.updates_mysql_toto }}'," }
+      - { regex: "'TRANSMISSION_PASSWORD', '.*'", line: "define('TRANSMISSION_PASSWORD', '{{ pwd.updates_transmission }}');" }
+  - name: configure updater (2)
+    lineinfile:
+      dest: /var/atscript/includes/miniwebcore.php
+      regex: "define\\('HOME_URL', 'https://.*'\\)"
+      line: "define('HOME_URL', 'https://{{ web_hostname }}');"
+  - name: configure AniDB clients
+    lineinfile:
+      dest: /var/{{ item }}/config.js
+      regex: "password: '.*',"
+      line: "password: '{{ pwd.updates_mysql_adbtcp }}',"
+    with_items:
+    - anidb_tcp
+    - anidb_http
+  - name: configure AniDB clients (2)
+    replace:
+      path: /var/{{ item }}/config.js
+      regexp: "'/log-anidb_"
+      replace: "'/../atscript/logs/log-anidb_"
+    with_items:
+    - anidb_tcp
+    - anidb_http
+
+  - name: import DB tables
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: '{{ item.db }}'
+      state: import
+      target: '{{ item.file }}'
+    with_items:
+    - { file: /var/atscript/schema/toto_repl.sql, db: toto_repl }
+    - { file: /var/atscript/schema/arcscrape.sql, db: arcscrape }
+    - { file: /var/atscript/schema/toto.sql, db: toto }
+    - { file: /var/anidb_tcp/schema.sql, db: anidb }
+    - { file: /var/anidb_http/schema.sql, db: anidb }
+    - { file: /var/atscript/schema/anidb_data.sql, db: anidb }
+
+  # AniDB clients
+  - name: gzbz2 folder
+    file:
+      dest: /var/anidb_tcp/node_modules
+      state: directory
+  - name: install gzbz2
+    git:
+      repo: https://github.com/animetosho/node-gzbz2
+      dest: /var/anidb_tcp/node_modules/gzbz2
+    register: gzbz2_clone
+  - name: build gzbz2
+    command: node-gyp rebuild
+    args:
+      chdir: /var/anidb_tcp/node_modules/gzbz2
+    when: gzbz2_clone.changed
+  - name: xmlsave perms
+    file:
+      path: /var/anidb_http/xmlsave
+      state: directory
+      mode: '777'
+  
+  # cloudscraper
+  - name: install cloudscraper
+    npm:
+      path: /var/atscript/3rdparty/cloudscraper
+      production: yes
+      global: no
+  - name: install puppeteer dep  # for some reason, this is listed as a devDependency, despite being mandatory
+    npm:
+      path: /var/atscript/3rdparty/cloudscraper
+      name: puppeteer
+      production: yes
+      global: no
+  - name: copy cloudscraper service
+    copy:
+      src: updates/cloudscraper.service
+      dest: /etc/systemd/system/cloudscraper.service
+  - name: enable cloudscraper service
+    systemd:
+      name: cloudscraper
+      daemon_reload: yes
+      enabled: yes
+      state: started
+  
+  # for image tools
+  - name: install image handling build reqs
+    apt:
+      name:
+      - cmake
+      - nasm
+      - libpng-dev
+      - libwebp-dev
+      state: present
+  - name: download mozjpeg src
+    get_url:
+      url: 'https://github.com/mozilla/mozjpeg/archive/refs/tags/v{{ mozjpeg_ver }}.tar.gz'
+      dest: '/root/setup/mozjpeg-{{ mozjpeg_ver }}.tar.gz'
+    register: mozjpeg_source
+  - name: unpack mozjpeg src
+    unarchive:
+      src: '{{ mozjpeg_source.dest }}'
+      copy: no
+      dest: /root/setup/
+    when: mozjpeg_source.changed
+    register: mozjpeg_source_unpack
+  - name: create mozjpeg build dir
+    file:
+      path: '/root/setup/mozjpeg-{{ mozjpeg_ver }}/build'
+      state: directory
+    when: mozjpeg_source.changed
+  - name: build mozjpeg
+    shell: cmake .. && cmake --build .
+    args:
+      chdir: /root/setup/mozjpeg-{{ mozjpeg_ver }}/build
+    when: mozjpeg_source_unpack.changed
+    register: mozjpeg_build
+  - name: install mozjpeg
+    copy:
+      remote_src: yes
+      src: '/root/setup/mozjpeg-{{ mozjpeg_ver }}/build/{{ item }}'
+      dest: '/var/atscript/3rdparty/{{ item }}'
+      mode: '755'
+    when: mozjpeg_build.changed
+    with_items:
+    - jpegtran
+    - cjpeg
+  
+  - name: download is_image_transparent src
+    get_url:
+      url: 'https://raw.githubusercontent.com/animetosho/is_image_transparent/refs/heads/master/image_empty_check.c'
+      dest: '/root/setup/image_empty_check.c'
+    register: imgtrans_source
+  - name: build is_image_transparent
+    command: cc -Wall -O2 image_empty_check.c -o /var/atscript/3rdparty/is_image_transparent -lwebp -lpng
+    args:
+      chdir: '/root/setup'
+      creates: /var/atscript/3rdparty/is_image_transparent
+    when: imgtrans_source.changed
+  
+  # perms
+  - name: fix general folder perms
+    command: find /var/atscript/ -mindepth 1 -type d -exec chmod a+x {} ;
+  - name: fix specific folder perms
+    file:
+      path: '/var/atscript/{{ item.dir }}'
+      state: directory
+      mode: '{{ item.mode }}'
+    with_items:
+    - { dir: 'includes/lzma-opts', mode: '755' }
+    - { dir: 'admin_www', mode: '711' }
+    - { dir: 'logs', mode: '777' }
+  - name: harden perms in support dir
+    file:
+      path: '/var/atscript/support/{{ item }}'
+      owner: root
+      group: root
+      mode: '600'
+    with_items:
+    - dumpdb-sync.php
+    - loaddb-sync.php
+  - name: timebase.txt should be writable
+    file:
+      path: /var/atscript/timebase.txt
+      state: touch
+      mode: '666'
+  
+  - name: DB backup cron (disabled)
+    copy:
+      dest: /etc/cron.d/dbbak
+      content: |
+        PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+        #5 8 * * * root /root/dbbak/bak.sh
+  - name: totocron (disabled)
+    copy:
+      src: updates/totocron-disabled
+      dest: /etc/cron.d/totocron
+

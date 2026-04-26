@@ -1,0 +1,13 @@
+[Service]
+ExecStart=/usr/bin/spiped -d -n 30 -F -f -k - -s '[0.0.0.0]:7080' -t '/var/run/nginx-admin.sock'
+Restart=always
+UMask=0000
+StandardInput=file:/etc/spiped/nginx.key
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spiped
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

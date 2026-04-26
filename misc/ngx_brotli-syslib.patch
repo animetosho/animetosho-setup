@@ -1,0 +1,21 @@
+--- filter/config
++++ filter/config
+@@ -42,7 +42,7 @@
+ ngx_module_type=HTTP_FILTER
+ ngx_module_name=ngx_http_brotli_filter_module
+ 
+-brotli="$ngx_addon_dir/deps/brotli/c"
++brotli="/usr"
+ if [ ! -f "$brotli/include/brotli/encode.h" ]; then
+ cat << END
+ 
+@@ -66,7 +66,7 @@
+ ngx_module_incs="$brotli/include"
+ ngx_module_deps="$BROTLI_ENC_H"
+ ngx_module_srcs="$BROTLI_MODULE_SRC_DIR/ngx_http_brotli_filter_module.c"
+-ngx_module_libs="-L$BROTLI_OUTPUT_DIRECTORY -lbrotlienc -lbrotlicommon -lm"
++ngx_module_libs="-lbrotlienc -lbrotlicommon -lm"
+ ngx_module_order="$ngx_module_name \
+                   ngx_pagespeed \
+                   ngx_http_postpone_filter_module \
+

@@ -1,0 +1,9 @@
+/var/log/transmission-daemon.log {
+	rotate 8
+	weekly
+	missingok
+	notifempty
+	compress
+	delaycompress
+	copytruncate
+}

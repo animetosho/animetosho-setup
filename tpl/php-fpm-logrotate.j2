@@ -1,0 +1,11 @@
+/var/log/php{{ php_ver }}-fpm.err {
+	rotate 7
+	daily
+	missingok
+	notifempty
+	compress
+	delaycompress
+	postrotate
+		/usr/lib/php/php{{ php_ver }}-fpm-reopenlogs
+	endscript
+}

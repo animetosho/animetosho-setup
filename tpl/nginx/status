@@ -1,0 +1,12 @@
+server {
+root /var/www;
+listen 127.0.0.1:8080 default_server;
+server_name _;
+
+location ~ ^/(fpm-status|ping) {
+	include snippets/fpm.conf;
+}
+location ~ ^/nginx-status {
+	stub_status;
+}
+}

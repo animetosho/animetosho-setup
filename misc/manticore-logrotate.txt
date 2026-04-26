@@ -1,0 +1,12 @@
+/var/log/manticore/*.log {
+	daily
+	rotate 5
+	compress
+	missingok
+	notifempty
+	
+	sharedscripts
+	postrotate
+		start-stop-daemon -K -p /var/run/manticore/searchd.pid -s USR1 -x /usr/bin/searchd -q
+	endscript
+}

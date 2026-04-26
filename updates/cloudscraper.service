@@ -1,0 +1,12 @@
+[Service]
+ExecStart=/usr/bin/nodejs /var/atscript/3rdparty/cloudscraper/index.js
+Restart=always
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cloudscraper
+User=atscript
+Group=atscript
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

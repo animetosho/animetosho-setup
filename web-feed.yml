@@ -1,0 +1,61 @@
+
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  tasks:
+  - name: PHP FPM conf
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/pool.d/www.conf'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?pm\.max_children',      line: 'pm.max_children = 30' }
+    - { regexp: '^;?pm\.start_servers',     line: 'pm.start_servers = 10' }
+    - { regexp: '^;?pm\.max_spare_servers', line: 'pm.max_spare_servers = 10' }
+    - { regexp: '^;?pm\.min_spare_servers', line: 'pm.min_spare_servers = 3' }
+    - { regexp: '^;?pm\.max_spawn_rate',    line: 'pm.max_spawn_rate = 10' }
+    register: php_conf
+  - name: restart php-fpm
+    service:
+      name: php{{ php_ver }}-fpm
+      state: restarted
+    when: php_conf.changed
+
+  - name: nginx config
+    lineinfile:
+      dest: /etc/nginx/nginx.conf
+      regex: '{{ item.regex }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regex: '^worker_rlimit_nofile ', line: 'worker_rlimit_nofile 16384;' }
+    - { regex: '^\s*worker_connections ', line: 'worker_connections 2048;' }
+  - name: nginx temp file redirect
+    replace:
+      path: /etc/nginx/sites-enabled/_base
+      regexp: '^#([a-z_]+_temp_path \/(cache|dev\/shm).+;)$'
+      replace: '\1'
+  - name: restart nginx
+    service:
+      name: nginx
+      state: restarted  
+  
+  - name: disable arcscrape replication for feed server
+    lineinfile:
+      dest: '/etc/mysql/conf.d/custom.cnf'
+      insertafter: EOF
+      line: 'replicate_ignore_db = arcscrape'
+    register: mysql_conf
+  - name: restart mysql
+    service:
+      name: mysql
+      state: restarted
+    when: mysql_conf.changed
+
+  # feed server not served over Tor
+  - name: disable Tor service
+    systemd:
+      name: tor@default
+      state: stopped
+      enabled: no

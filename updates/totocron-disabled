@@ -1,0 +1,30 @@
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+#* * * * * atscript php /var/atscript/cron.php >/dev/null
+#* * * * * atscript php /var/atscript/cron-complete.php >/dev/null
+#* * * * * atscript /var/atscript/cron-finfo.sh >/dev/null
+#*/2 * * * * atscript /var/atscript/cron-fiqueue.sh >/dev/null
+#*/2 * * * * atscript /var/atscript/cron-ulqueue.sh >/dev/null
+#*/2 * * * * atscript php /var/atscript/cron-newsprep.php >/dev/null
+#*/2 * * * * atscript /var/atscript/cron-news.sh >/dev/null
+#44 7 * * * atscript /var/atscript/news/repost.sh >/dev/null
+#*/2 * * * * atscript php /var/atscript/cron-linkresolv.php >/dev/null
+#* * * * * atscript /var/atscript/cron-adb.sh >/dev/null
+#*/3 * * * * atscript php /var/atscript/cron-scrape.php >/dev/null
+#34 */2 * * * atscript php /var/atscript/cron-automod.php
+
+## !! Note !! the AniDB TCP API client will not work! Enabling the following will likely be pointless!
+## See https://github.com/animetosho/anidb-tcp-client for details
+##47 */2 * * * atscript nice -n5 nodejs /var/anidb_tcp/index.js >/dev/nullanito
+
+#07 7 * * * atscript nice -n5 nodejs /var/anidb_http/index.js >/dev/null
+#10 7 * * * atscript nice -n5 php /var/atscript/cron-tvdb.php >/dev/null
+
+#*/2 * * * * atscript php /var/atscript/support/trans-ullimit.php >/dev/null
+#44 9 11 * * root /var/atscript/support/cleanlogs.sh >/dev/null
+#44 10 */3 * * atscript php /var/atscript/cron-prune.php >/dev/null
+
+#*/5 * * * * atscript php /var/atscript/cron-arcscrape.php nyaasi >/dev/null
+#26,56 * * * * atscript php /var/atscript/cron-arcscrape.php nyaasis >/dev/null
+#*/5 * * * * atscript php /var/atscript/cron-arcscrape.php tosho >/dev/null
+#*/5 * * * * atscript php /var/atscript/cron-arcscrape.php nekobt >/dev/null

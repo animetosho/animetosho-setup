@@ -1,0 +1,135 @@
+fastcgi_cache_path /cache/nginx/fastcgi/ levels=1:2 keys_zone=anito_fcgicache:10m inactive=15m max_size=100m;
+
+map_hash_bucket_size 128;  # needed for $site_storage_domain
+
+geo $limit_whitelist {
+	default 0;
+	#[whitelisted IP] 1;
+}
+
+map $limit_whitelist $limit_ip {
+	0     $binary_remote_addr;
+	1     "";
+}
+
+map $http_host $site_storage_domain {
+	default {{ storage_hostname }};
+	{{ web_onion }} {{ storage_onion }};
+}
+
+limit_req_zone $limit_ip zone=anitoIp:4m rate=90r/m;
+limit_req_zone $limit_ip zone=anitoIp2:15m rate=30r/m;
+#limit_req_zone $limit_ip$uri zone=anitoIpUri:8m rate=3r/m;
+
+server {
+	listen 443 ssl http2 fastopen=256;
+	listen [::]:443 ssl http2 fastopen=256;
+	server_name {{ web_hostname }};
+
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ web_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ web_hostname }}/privkey.pem;
+
+	if ($http_user_agent ~* (musobot) ) {
+		return 503;
+	}
+
+	include snippets/atproxied;
+	include snippets/atsite;
+}
+
+server {
+	listen 443;
+	listen [::]:443;
+	server_name {{ web_ip4_hostname }};
+
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ web_ip4_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ web_ip4_hostname }}/privkey.pem;
+
+	include snippets/atsite;
+	location = /robots.txt { rewrite ^.*$ /robots-denyall.txt; }
+}
+server {
+	listen 443;
+	listen [::]:443;
+	server_name {{ web_ip6_hostname }};
+
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ web_ip6_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ web_ip6_hostname }}/privkey.pem;
+
+	include snippets/atsite;
+	location = /robots.txt { rewrite ^.*$ /robots-denyall.txt; }
+}
+server {
+	listen 127.0.0.1:80;
+	server_name {{ web_onion }};
+	include snippets/atsite;
+	location = /robots.txt { rewrite ^.*$ /robots-denyall.txt; }
+}
+
+
+# to enable feeds to use HTTP
+server {
+	listen 80;
+	listen [::]:80;
+	server_name {{ web_hostname }};
+	add_header X-Content-Type-Options "nosniff" always;
+	location ~ ^/feed/ {
+		rewrite ^/feed/(.*) $scheme://{{ feed_hostname }}/$1 permanent;
+		access_log off;
+	}
+	location ~ ^/storage/ {
+		# mitigate nginx bug
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6%%3F$7%%3F$8 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6%%3F$7 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5%%3F$6 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4%%3F$5 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3%%3F$4 permanent;
+		rewrite ^/storage/([^?]*)\?([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2%%3F$3 permanent;
+		rewrite ^/storage/([^?]*)\?(.*)$ $scheme://{{ storage_hostname }}/$1%%3F$2 permanent;
+		
+		rewrite ^/storage/(.*)$ $scheme://{{ storage_hostname }}/$1 permanent;
+		access_log off;
+		
+		add_header X-Content-Type-Options "nosniff" always;
+		add_header Access-Control-Allow-Origin * always;
+		add_header Access-Control-Allow-Methods "HEAD, GET, OPTIONS" always;
+		add_header Access-Control-Max-Age 1209600 always;
+	}
+	location / {
+		rewrite ^/(.*) https://{{ web_hostname }}/$1 permanent;
+	}
+	location ~ ^/.well-known { root /var/www; }
+}
+
+# redirects
+server {
+	listen 80 default_server fastopen=256;
+	listen [::]:80 default_server fastopen=256;
+	server_name _;
+	location / {
+		rewrite ^/(.*) https://{{ web_hostname }}/$1 permanent;
+	}
+	location ~ ^/.well-known { root /var/www; }
+}
+server {
+	listen 443 default_server;
+	listen [::]:443 default_server;
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ web_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ web_hostname }}/privkey.pem;
+	server_name _;
+	rewrite ^/(.*) https://{{ web_hostname }}/$1 permanent;
+}
+
+server {
+	listen 80;
+	listen [::]:80;
+	server_name ~^(?<ip_host>ipv[46]\.animetosho\.org)$;
+	location / {
+		rewrite ^/(.*) https://$ip_host/$1 permanent;
+	}
+	location ~ ^/.well-known { root /var/www; }
+}

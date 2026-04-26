@@ -1,0 +1,238 @@
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  - keys/passwords.yml
+  tasks:
+  - name: install PHP APCu
+    apt:
+      name: "php-apcu"
+      state: present
+    register: php_apcu
+  - name: configure PHP APCu
+    command: '/usr/sbin/php{{ item }}'
+    with_items:
+    - dismod -s cli apcu
+    - enmod -s fpm apcu
+    when: php_apcu.changed
+  - name: remove PHP APC-bc
+    apt:
+      name: php-apcu-bc
+      state: absent
+  - name: PHP APC config
+    template:
+      src: tpl/php-apcu.ini
+      dest: /etc/php/{{ php_ver }}/fpm/conf.d/99-apcu-config.ini
+  
+  - name: PHP FPM conf
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/pool.d/www.conf'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?pm\.max_children',      line: 'pm.max_children = 20' }
+    - { regexp: '^;?pm\.start_servers',     line: 'pm.start_servers = 5' }
+    - { regexp: '^;?pm\.max_spare_servers', line: 'pm.max_spare_servers = 5' }
+    - { regexp: '^;?pm\.max_requests',      line: 'pm.max_requests = 1000' }
+    - { regexp: '^;?pm\.status_path',       line: 'pm.status_path = /fpm-status' }
+  
+  - name: Cache dir
+    file:
+      path: /cache
+      state: directory
+  - name: nginx caches
+    file:
+      path: '/cache/nginx/{{ item }}'
+      state: directory
+      mode: '700'
+      owner: www-data
+    with_items:
+    - ''
+    - body
+    - proxy
+    
+  - name: install letsencrypt
+    apt:
+      name: letsencrypt
+      state: present
+  - name: SSL certs dir
+    file:
+      path: /etc/ssl/anito
+      state: directory
+      mode: '710'
+  - name: add dhparams
+    copy:
+      dest: /etc/ssl/anito/dhparams.pem
+      src: keys/dhparams
+  - name: auto-reload nginx for letsencrypt
+    lineinfile:
+      dest: /etc/cron.d/certbot
+      line: '22 5 * * 1 root service nginx reload'
+  
+  - name: nginx snippets
+    template:
+      src: 'tpl/nginx/{{ item }}'
+      dest: '/etc/nginx/snippets/{{ item }}'
+    with_items:
+    - fpm.conf
+    - static.conf
+    - ssl.conf
+  - name: disable nginx default site
+    file:
+      path: /etc/nginx/sites-enabled/default
+      state: absent
+  - name: nginx logrotate
+    lineinfile:
+      dest: /etc/logrotate.d/nginx
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^\s*(dai|week)ly$', line: "\tdaily"}
+    - { regexp: '^\s*rotate', line: "\trotate 3"}
+  
+  - name: download zlib-ng src
+    get_url:
+      url: 'https://github.com/zlib-ng/zlib-ng/archive/refs/tags/{{ zlibng_ver }}.tar.gz'
+      dest: '/root/setup/zlib-ng-{{ zlibng_ver }}.tar.gz'
+    register: zlibng_source
+  - name: unpack zlib-ng src
+    unarchive:
+      src: '{{ zlibng_source.dest }}'
+      copy: no
+      dest: /root/setup/
+    when: zlibng_source.changed
+    register: zlibng_source_unpack
+  - name: configure zlib-ng
+    command: ./configure --zlib-compat
+    args:
+      chdir: '/root/setup/zlib-ng-{{ zlibng_ver }}'
+    when: zlibng_source_unpack.changed
+    register: zlibng_configure
+  - name: build zlib-ng
+    command: make -j2
+    args:
+      chdir: '/root/setup/zlib-ng-{{ zlibng_ver }}'
+    when: zlibng_configure.changed
+    register: zlibng_make
+  - name: install zlib-ng
+    shell: cp libz.so.1.*.zlib-ng /usr/lib/x86_64-linux-gnu/libz-ng.so
+    args:
+      chdir: '/root/setup/zlib-ng-{{ zlibng_ver }}'
+      creates: /usr/lib/x86_64-linux-gnu/libz-ng.so
+    when: zlibng_make.changed
+  - name: nginx service override
+    copy:
+      dest: /etc/systemd/system/nginx.service.d/override.conf
+      src: misc/nginx.service.override
+  - name: reload systemctl & restart nginx
+    systemd:
+      daemon_reload: yes
+      name: nginx
+      state: restarted
+  
+  - name: mysql config
+    template:
+      src: tpl/mysql.cnf
+      dest: /etc/mysql/conf.d/custom.cnf
+    register: mysql_conf
+  - name: restart mysql
+    service:
+      name: mysql
+      state: restarted
+    when: mysql_conf.changed
+  - name: clear binlogs
+    shell: /bin/rm -f /var/log/mysql/mariadb-bin.*
+  - name: remove InnoDB files
+    file:
+      path: '/var/lib/mysql/{{ item }}'
+      state: absent
+    with_items:
+    - ib_buffer_pool
+    - ibdata1
+    - ib_logfile0
+    - ib_logfile1
+  - name: set default mysql master config
+    mysql_replication:
+      mode: changeprimary
+      master_host: 127.0.0.1
+      master_port: 7336
+      master_user: toto_repl
+      master_password: '{{ pwd.updates_mysql_repl }}'
+      master_connect_retry: 60
+      master_ssl: false
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  
+  - name: create mysql spiped service
+    template:
+      src: 'tpl/{{ item }}.service'
+      dest: '/etc/systemd/system/{{ item }}.service'
+    with_items:
+    - spiped-mysql
+    register: spiped_mysql
+  - name: load in new service defs
+    systemd:
+      daemon_reload: yes
+    when: spiped_mysql.changed
+  
+  - name: install HTTPS Apt
+    apt:
+      name: apt-transport-https
+      state: present
+  - name: install python-debian  # required by Ansible's deb822_repository
+    apt:
+      name: python3-debian
+      state: present
+  - name: download tor key
+    get_url:
+      url: 'https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc'
+      dest: '/usr/share/keyrings/tor-archive-keyring.asc'
+  - name: add Tor repo
+    deb822_repository:
+      name: tor
+      types: [deb, deb-src]
+      uris: https://deb.torproject.org/torproject.org
+      components: main
+      suites: '{{ ansible_distribution_release }}'
+      signed_by: /usr/share/keyrings/tor-archive-keyring.asc
+      enabled: yes
+  - name: install Tor
+    apt:
+      name: tor
+      state: present
+      install_recommends: no
+  - name: hidden service dir
+    file:
+      path: /var/lib/tor/hidden_service
+      state: directory
+      owner: debian-tor
+      group: debian-tor
+      mode: '700'
+  - name: Tor config
+    blockinfile:
+      path: /etc/tor/torrc
+      block: |
+        SocksPort 0
+        HiddenServiceDir /var/lib/tor/hidden_service
+        HiddenServicePort 80 127.0.0.1:80
+  - name: Tor config (Log)
+    lineinfile:
+      path: /etc/tor/torrc
+      regexp: '^#?Log notice file'
+      line: 'Log notice file /var/log/tor/notices.log'
+  - name: restart Tor service
+    systemd:
+      name: tor@default
+      state: restarted
+
+  # this is used as the default SSL cert which should be replaced by the user
+  - name: install ssl-cert
+    apt:
+      name: ssl-cert
+      state: present
+  - name: make snakeoil
+    command: make-ssl-cert generate-default-snakeoil
+    args:
+      creates: /etc/ssl/private/ssl-cert-snakeoil.key
+    

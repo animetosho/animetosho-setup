@@ -1,0 +1,47 @@
+
+---
+- remote_user: root
+  hosts: all
+  tasks:
+  - name: create sftponly group
+    group:
+      name: sftponly
+  - name: configure SSH for sftponly
+    blockinfile:
+      path: /etc/ssh/sshd_config
+      block: |
+        UseDNS no
+        AllowAgentForwarding no
+        Match group sftponly
+          ChrootDirectory /home/%u
+          X11Forwarding no
+          AllowTcpForwarding no
+          ForceCommand internal-sftp
+  - name: set SFTP to use internal-sftp
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^Subsystem\s+sftp\s+'
+      line: 'Subsystem sftp internal-sftp'
+  - name: create totobak user
+    user:
+      create_home: yes
+      name: totobak
+      group: sftponly
+  - name: totobak auth key
+    authorized_key:
+      user: totobak
+      exclusive: yes
+      key: '{{ lookup("file", "keys/backup-ssh-pub") }}'
+  - name: create DB backup folder
+    file:
+      path: /home/totobak/db-backup
+      state: directory
+      owner: totobak
+      mode: '750'
+  - name: totobak perms for SFTP chroot
+    file:
+      path: /home/totobak
+      state: directory
+      owner: root
+      group: root
+      mode: '711'

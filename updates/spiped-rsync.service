@@ -1,0 +1,13 @@
+[Service]
+ExecStart=/usr/bin/spiped -e -n 10 -F -f -k - -s '[127.0.0.1]:1873' -t '[{{ storage_host }}]:2873'
+Restart=always
+UMask=0000
+StandardInput=file:/etc/spiped/rsyncd.key
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spiped
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

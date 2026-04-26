@@ -1,0 +1,12 @@
+/var/log/rsyncd.log {
+	daily
+	rotate 3
+	compress
+	missingok
+	notifempty
+	
+	sharedscripts
+	postrotate
+		/usr/bin/systemctl reload rsyncd.service > /dev/null 2>&1 || true
+	endscript
+}

@@ -1,0 +1,95 @@
+limit_req_zone $binary_remote_addr zone=feedIp:1m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=feedIp2:4m rate=20r/m;
+fastcgi_cache_path /dev/shm/nginx/feed levels=1:2 keys_zone=feed_cache:10m inactive=15m max_size=100m;
+
+server {
+	index index.jpg;
+	listen 443;
+	listen [::]:443;
+	
+	include snippets/ssl.conf;
+	ssl_certificate /etc/letsencrypt/live/{{ feed_hostname }}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{ feed_hostname }}/privkey.pem;
+	
+	access_log /var/log/nginx/access-feed.log combined buffer=32k flush=1s;
+	error_log /var/log/nginx/error-feed.log warn;
+	
+	server_name {{ feed_hostname }};
+	add_header Referrer-Policy no-referrer always;
+	add_header Access-Control-Allow-Origin * always;
+	add_header Access-Control-Allow-Methods "HEAD, GET, OPTIONS" always;
+	add_header Access-Control-Max-Age 1209600 always;
+	
+	root /var/www/anito;
+	location ~ ^/[a-z0-9A-Z%]+(\?.*|$) {
+		rewrite ^/([a-z0-9A-Z%]+)$ /index.php?action=feed&subaction=$1 break;
+		rewrite ^/([a-z0-9A-Z%]+)\?(.*)$ /index.php?action=feed&subaction=$1&$2 break;
+		strip on;
+		limit_req zone=feedIp burst=5;
+		limit_req zone=feedIp2 burst=30 nodelay;
+		gzip_comp_level 4;
+		brotli_comp_level 3;
+		sorted_querysting_filter_parameter extended apikey password;
+		fastcgi_pass unix:/run/php/php{{ php_ver }}-fpm.sock;
+		fastcgi_cache feed_cache;
+		fastcgi_cache_key "$request_method|$uri|$sorted_querystring_args";
+		fastcgi_cache_valid 200 404 4m;
+		fastcgi_cache_valid 301 302 400 500 0;
+		fastcgi_ignore_headers Cache-Control X-Accel-Expires Set-Cookie;
+		fastcgi_cache_min_uses 8;
+		fastcgi_cache_use_stale timeout;
+		fastcgi_buffers 3 256k;
+		fastcgi_socket_keepalive on;
+		fastcgi_max_temp_file_size 0;
+		include fastcgi.conf;
+	}
+	
+	location / {
+		root /var/www/feed;
+		index index.jpg;
+	}
+}
+
+server {
+	listen 80;
+	listen [::]:80;
+	server_name {{ feed_hostname }};
+	add_header X-Content-Type-Options nosniff always;
+	add_header Referrer-Policy no-referrer always;
+	add_header Access-Control-Allow-Origin * always;
+	add_header Access-Control-Allow-Methods "HEAD, GET, OPTIONS" always;
+	add_header Access-Control-Max-Age 1209600 always;
+	
+	access_log /var/log/nginx/access-feed.log combined buffer=32k flush=1s;
+	error_log /var/log/nginx/error-feed.log warn;
+	
+	root /var/www/anito;
+	location ~ ^/[a-z0-9A-Z%]+(\?.*|$) {
+		rewrite ^/([a-z0-9A-Z%]+)$ /index.php?action=feed&subaction=$1 break;
+		rewrite ^/([a-z0-9A-Z%]+)\?(.*)$ /index.php?action=feed&subaction=$1&$2 break;
+		strip on;
+		limit_req zone=feedIp burst=5;
+		limit_req zone=feedIp2 burst=30 nodelay;
+		gzip_comp_level 4;
+		brotli_comp_level 3;
+		sorted_querysting_filter_parameter extended apikey password;
+		fastcgi_pass unix:/run/php/php{{ php_ver }}-fpm.sock;
+		fastcgi_cache feed_cache;
+		fastcgi_cache_key "$request_method|$uri|$sorted_querystring_args";
+		fastcgi_cache_valid 200 404 4m;
+		fastcgi_cache_valid 301 302 400 500 0;
+		fastcgi_ignore_headers Cache-Control X-Accel-Expires Set-Cookie;
+		fastcgi_cache_min_uses 8;
+		fastcgi_cache_use_stale timeout;
+		fastcgi_buffers 4 128k;
+		fastcgi_socket_keepalive on;
+		fastcgi_max_temp_file_size 0;
+		include fastcgi.conf;
+	}
+	
+	location / {
+		root /var/www/feed;
+		rewrite ^/$ https://{{ feed_hostname }}/;
+	}
+	location ~ ^/.well-known { root /var/www; }
+}

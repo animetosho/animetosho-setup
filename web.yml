@@ -1,0 +1,425 @@
+
+---
+- remote_user: root
+  hosts: all
+  vars_files:
+  - vars.yml
+  - keys/passwords.yml
+  tasks:
+  - name: install expect # for unbuffer command
+    apt:
+      name:
+      - expect
+      - tcl8.6
+      state: present
+      install_recommends: no
+  
+  - name: nginx sites
+    template:
+      src: 'tpl/nginx/{{ item }}'
+      dest: '/etc/nginx/sites-enabled/{{ item }}'
+    with_items:
+    - _base
+    - anito
+    - feed
+    - status
+  - name: nginx site snippets
+    template:
+      src: 'tpl/nginx-anito/{{ item }}'
+      dest: '/etc/nginx/snippets/{{ item }}'
+    with_items:
+    - atphp
+    - atsite
+    - atproxied
+    - proxy.conf
+  - name: nginx webroot dirs
+    file:
+      path: '{{ item }}'
+      state: directory
+    with_items:
+    - /var/www/anito
+    - /var/www/feed
+  - name: nginx caches
+    file:
+      path: '/cache/nginx/{{ item }}'
+      state: directory
+      mode: '700'
+      group: root
+      owner: www-data
+    with_items:
+    - mirror
+    - fastcgi
+
+  - name: create nginx spiped services
+    template:
+      src: 'tpl/spiped-nginx.service'
+      dest: '/etc/systemd/system/spiped-nginx-{{ item.name }}.service'
+    with_items:
+    - { name: 'updates1', host: '{{ updates_host }}' }
+  - name: enable spiped service
+    systemd:
+      name: '{{ item }}'
+      daemon_reload: yes
+      enabled: yes
+      state: started
+    with_items:
+    - spiped-nginx-updates1
+
+  - name: PHP conf
+    lineinfile:
+      dest: '/etc/php/{{ php_ver }}/fpm/php.ini'
+      regexp: '{{ item.regexp }}'
+      line: '{{ item.line }}'
+    with_items:
+    - { regexp: '^;?opcache\.memory_consumption ?=',  line: 'opcache.memory_consumption=8'}
+  - name: restart php-fpm
+    service:
+      name: php{{ php_ver }}-fpm
+      state: restarted
+
+  - name: copy MySQL sphinx script
+    copy:
+      src: misc/mysql-sphinx.sql
+      dest: /root/setup
+  - name: import sphinx table
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: anito
+      state: import
+      target: /root/setup/mysql-sphinx.sql
+  - name: setup mysql users
+    mysql_user:
+      name: '{{ item.name }}'
+      password: '{{ item.password }}'
+      priv: '{{ item.priv }}'
+      host: localhost
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+    with_items:
+    - { name: sphinx, password: '{{ pwd.web_mysql_sphinx }}', priv: 'anito.*:SELECT/anidb.*:SELECT/toto_repl.*:SELECT/anito.sphinx_delta:SELECT,INSERT,UPDATE,DELETE' }
+    - { name: toto_web, password: '{{ pwd.web_mysql_web }}', priv: 'anito.*:SELECT,INSERT,UPDATE,DELETE/toto_repl.*:SELECT/anidb.*:SELECT' }
+    #- { name: toto_mirror, password: '{{ pwd.web_mysql_web }}', priv: 'anito.*:SELECT/toto_repl.*:SELECT/anidb.*:SELECT' }
+    - { name: backup, password: '{{ pwd.web_mysql_backup }}', priv: '*.*:LOCK TABLES,RELOAD,REPLICATION CLIENT,SELECT' }
+    - { name: cachesrv, password: '{{ pwd.web_mysql_cachesrv }}', priv: 'arcscrape.*:SELECT' }
+
+  - name: install postfix
+    apt:
+      name: postfix
+      state: present
+  - name: postfix only on localhost
+    lineinfile:
+      dest: /etc/postfix/main.cf
+      regexp: '^inet_interfaces ='
+      line: 'inet_interfaces = localhost'
+  - name: restart postfix
+    service:
+      name: postfix
+      state: restarted
+
+  - name: download manticore repo
+    get_url:
+      url: 'https://repo.manticoresearch.com/manticore-repo.noarch.deb'
+      dest: '/root/setup/manticore-repo.noarch.deb'
+    register: manticore_deb
+  - name: install manticore repo
+    apt: deb="{{ manticore_deb.dest }}"
+    when: manticore_deb.changed
+  - name: install manticore
+    apt:
+      update_cache: yes
+      name:
+      - manticore-server
+      - manticore-columnar-lib
+      - manticore-tools
+  - name: Index dir
+    file:
+      path: '{{ item }}'
+      state: directory
+      owner: manticore
+    with_items:
+    - /cache/manticore
+    - /cache/manticore/data
+  - name: manticore config
+    template:
+      src: tpl/manticore.conf
+      dest: /etc/manticoresearch/manticore.conf
+  - name: manticore reindex script
+    copy:
+      src: misc/manticore-{{ item }}
+      dest: /etc/manticoresearch/{{ item }}
+      mode: '755'
+    with_items:
+    - reindex-main.sh
+    - reindex-delta.sh
+  - name: manticore log dir
+    file:
+      path: /var/log/manticore
+      state: directory
+      owner: manticore
+      group: manticore
+      mode: '700'
+  - name: manticore auto start
+    lineinfile:
+      path: /etc/default/manticore
+      regexp: '^#?START='
+      line: 'START=yes'
+  - name: enable+restart manticore service
+    systemd:
+      name: manticore
+      enabled: yes
+      state: restarted
+  - name: manticore logrotate
+    copy:
+      src: misc/manticore-logrotate.txt
+      dest: /etc/logrotate.d/manticore
+      backup: no
+  - name: manticore cron
+    copy:
+      dest: /etc/cron.d/manticore
+      backup: no
+      content: |
+        SHELL=/bin/sh
+        PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+        #4 9 */5 * * manticore [ -x /usr/bin/indexer ] && /etc/manticoresearch/reindex-main.sh >/dev/null
+        #*/5 * * * * manticore [ -x /usr/bin/indexer ] && /etc/manticoresearch/reindex-delta.sh >/dev/null
+
+  - name: install nodejs+modules
+    apt:
+      name:
+      - nodejs
+      - node-lru-cache
+      - node-log4js
+      - node-markdown-it
+      - npm  # only used to install mariadb module
+      state: present
+  - name: Cache serv folder
+    file:
+      path: /var/www/cache
+      state: directory
+
+  - name: DB backup folder
+    file:
+      path: /root/dbbak
+      state: directory
+  - name: DB backup script
+    template:
+      src: 'tpl/dbbak.sh'
+      dest: '/root/dbbak/bak.sh'
+      mode: '755'
+  - name: DB backup key
+    copy:
+      dest: /root/dbbak/bak.key
+      mode: '600'
+      src: 'keys/backup.pem'
+  - name: DB backup cron
+    copy:
+      dest: /etc/cron.d/dbbak
+      content: |
+        PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+        #5 1 * * * root /root/dbbak/bak.sh
+
+
+  - name: feed web root
+    unarchive:
+      src: misc/feed_root.tar
+      copy: yes
+      dest: /var/www
+
+  - name: get web code
+    git:
+      repo: https://github.com/animetosho/animetosho-website.git
+      dest: /var/www/anito
+    register: code_clone
+    ignore_errors: yes
+    failed_when:
+    - code_clone.failed
+    - not 'Local modifications exist in ' in (code_clone.msg | default(''))
+  - name: update domain for XML files
+    replace:
+      path: /var/www/{{ item }}.xml
+      regexp: '/animetosho\.org/'
+      replace: '/{{ web_hostname }}/'
+    with_items:
+    - anito/nabcaps
+    - feed/nabcaps
+    - anito/opensearchdescription
+    when: code_clone.changed
+    register: xml_dom_changed
+  - name: regen XML gzips
+    command: 7z a -tgzip -mx=9 /var/www/{{ item }}.xml.gz /var/www/{{ item }}.xml
+    with_items:
+    - anito/nabcaps
+    - feed/nabcaps
+    - anito/opensearchdescription
+    when: xml_dom_changed.changed
+  - name: update web config
+    replace:
+      path: /var/www/anito/includes/config.php
+      regexp: '{{ item.rx }}'
+      replace: '{{ item.rp }}'
+    with_items:
+    - { rx: 'feed\.animetosho\.org', rp: '{{ feed_hostname }}' }
+    - { rx: '/cache\.animetosho\.org', rp: '/{{ cache_hostname }}' }
+    - { rx: 'rozvtgjhfwfrf4xbbhqevgwia6ut3twhcv3kxspqnklekojyoskcfryd\.onion', rp: '{{ web_onion }}' }
+    - { rx: '/storage\.animetosho\.org/', rp: '/{{ storage_hostname }}/' }
+    - { rx: '/storage\.2dhhlhbqpcgkros3mddwq7tuhhiaubjydejoy6npa3rn7snsofq3qjyd\.onion/', rp: '/{{ storage_onion }}/' }
+    - { rx: 'mirror\.animetosho\.org', rp: '{{ mirror_hostname }}' }
+    - { rx: "([@'/])animetosho\\.org'", rp: "\\1{{ web_hostname }}'" }
+    - { rx: 'xxxxxxxx', rp: '{{ pwd.web_mysql_web }}' }
+    when: code_clone.changed
+  
+  - name: import main DB tables
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: anito
+      state: import
+      target: /var/www/anito/schema/anito.sql
+
+  - name: download schema for replicated DBs
+    get_url:
+      url: 'https://raw.githubusercontent.com/animetosho/{{ item.repo }}/refs/heads/master/{{ item.src }}.sql'
+      dest: '/root/setup/schema-{{ item.dst }}.sql'
+    with_items:
+    - { repo: animetosho-updater, src: schema/toto_repl, dst: toto_repl }
+    - { repo: animetosho-updater, src: schema/arcscrape, dst: arcscrape }
+    - { repo: anidb-tcp-client, src: schema, dst: anidb }
+    - { repo: anidb-http-client, src: schema, dst: anidb2 }
+  - name: import replicated DB tables
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: '{{ item.db }}'
+      state: import
+      target: /root/setup/schema-{{ item.file }}.sql
+    with_items:
+    - { file: toto_repl, db: toto_repl }
+    - { file: arcscrape, db: arcscrape }
+    - { file: anidb, db: anidb }
+    - { file: anidb2, db: anidb }
+
+  - name: import additional DB schema
+    mysql_db:
+      config_file: /etc/mysql/debian.cnf
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      encoding: utf8mb4
+      name: '{{ item.db }}'
+      state: import
+      target: /var/www/anito/schema/{{ item.file }}.sql
+    with_items:
+    - { db: anidb, file: anidb-optional }
+    - { db: arcscrape, file: arcscrape-optional }
+    - { db: toto_repl, file: toto_repl-extra }
+    - { db: toto_repl, file: toto_repl-optional }
+
+  - name: get cache server code
+    git:
+      repo: https://github.com/animetosho/cache.animetosho.org.git
+      dest: /var/www/cache
+    register: cache_code_clone
+    ignore_errors: yes
+    failed_when:
+    - cache_code_clone.failed
+    - not 'Local modifications exist in ' in (cache_code_clone.msg | default(''))
+  - name: cache serv log dir
+    file:
+      path: /var/www/cache/log
+      state: directory
+  - name: cache serv log file
+    file:
+      path: /var/www/cache/log/cachesrv.log
+      state: touch
+      mode: '600'
+      owner: www-data
+  - name: install node-mariadb for cacheserv
+    npm:
+      name: mariadb
+      path: /root/setup/npmtmp
+      production: yes
+      global: no
+    register: node_mariadb
+  - name: place node-mariadb
+    command: mv /root/setup/npmtmp/node_modules /var/www/cache/app/node_modules
+    args:
+      creates: /var/www/cache/app/node_modules
+    when: node_mariadb.changed
+  - name: update cache server URLs
+    replace:
+      path: /var/www/cache/app/nyaasi.js
+      regexp: '{{ item.rx }}'
+      replace: '{{ item.rp }}'
+    with_items:
+    - { rx: '/cache\.animetosho\.org/', rp: '/{{ cache_hostname }}/' }
+    - { rx: '/storage\.animetosho\.org/', rp: '/{{ storage_hostname }}/' }
+    - { rx: '/animetosho\.org/', rp: '/{{ web_hostname }}/' }
+  - name: cacheserv nginx site
+    template:
+      src: 'tpl/nginx/cache'
+      dest: '/etc/nginx/sites-enabled/cache'
+  - name: create cachesrv service
+    template:
+      src: tpl/cachesrv.service
+      dest: /etc/systemd/system/cachesrv.service
+  - name: enable cachesrv service
+    systemd:
+      name: cachesrv
+      daemon_reload: yes
+      enabled: yes
+
+  - name: certificate dirs
+    file:
+      path: '/etc/letsencrypt/{{ item }}'
+      state: directory
+      mode: '700'
+      group: root
+      owner: root
+    with_items:
+    - live
+    - 'live/{{ web_hostname }}'
+    - 'live/{{ web_ip4_hostname }}'
+    - 'live/{{ web_ip6_hostname }}'
+    - 'live/{{ feed_hostname }}'
+    - 'live/{{ cache_hostname }}'
+  - name: stub certs
+    file:
+      src: '/etc/ssl/certs/ssl-cert-snakeoil.pem'
+      dest: '/etc/letsencrypt/live/{{ item }}/fullchain.pem'
+      state: link
+    with_items:
+    - '{{ web_hostname }}'
+    - '{{ web_ip4_hostname }}'
+    - '{{ web_ip6_hostname }}'
+    - '{{ feed_hostname }}'
+    - '{{ cache_hostname }}'
+  - name: stub keys
+    file:
+      src: '/etc/ssl/private/ssl-cert-snakeoil.key'
+      dest: '/etc/letsencrypt/live/{{ item }}/privkey.pem'
+      state: link
+    with_items:
+    - '{{ web_hostname }}'
+    - '{{ web_ip4_hostname }}'
+    - '{{ web_ip6_hostname }}'
+    - '{{ feed_hostname }}'
+    - '{{ cache_hostname }}'
+
+  - name: create nginx-cachedir service
+    copy:
+      src: misc/nginx-cachedir.service
+      dest: /etc/systemd/system/nginx-cachedir.service
+  - name: enable nginx-cachedir service
+    systemd:
+      name: nginx-cachedir
+      daemon_reload: yes
+      enabled: yes
+      state: started
+
+  - name: restart nginx
+    service:
+      name: nginx
+      state: restarted
+

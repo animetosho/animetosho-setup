@@ -1,0 +1,15 @@
+--- src/http/ngx_http_script.c
++++ src/http/ngx_http_script.c
+@@ -394,11 +394,11 @@
+ 
+                 if (ch == '}' && bracket) {
+                     i++;
+                     bracket = 0;
+                     break;
+-                }
++                } else if (bracket) continue;
+ 
+                 if ((ch >= 'A' && ch <= 'Z')
+                     || (ch >= 'a' && ch <= 'z')
+                     || (ch >= '0' && ch <= '9')
+                     || ch == '_')

@@ -1,0 +1,13 @@
+[Service]
+ExecStart=/usr/bin/spiped -e -n 30 -F -f -k - -s '/var/run/spiped.nginx-{{ item.name }}.sock' -t '[{{ item.host }}]:7080'
+Restart=always
+UMask=0000
+StandardInput=file:/etc/spiped/nginx.key
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spiped
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

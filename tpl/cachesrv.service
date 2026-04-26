@@ -1,0 +1,17 @@
+[Service]
+ExecStartPre=-+/usr/bin/mkdir /var/run/cachesrv
+ExecStartPre=+/usr/bin/chown www-data: /var/run/cachesrv
+ExecStart=/usr/bin/nodejs /var/www/cache/app/index.js
+WorkingDirectory=/var/www/cache
+Restart=always
+SyslogIdentifier=cachesrv
+User=www-data
+Group=www-data
+Environment=NODE_ENV=production
+Environment=DB_USER=cachesrv
+Environment=DB_PASS={{ pwd.web_mysql_cachesrv }}
+Environment=LISTEN_SOCK=/var/run/cachesrv/cachesrv.sock
+Environment=LOG_FILE=/var/www/cache/log/cachesrv.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Service]
+ExecStart=/usr/bin/spiped -d -n 20 -F -k - -s '[::]:7336' -t '/var/run/mysqld/mysqld.sock'
+Restart=always
+UMask=0000
+StandardInput=file:/etc/spiped/mysql.key
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spiped
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
