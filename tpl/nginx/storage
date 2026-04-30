@@ -28,6 +28,7 @@ map $http_user_agent $meta_crawler {
 	"~ ClaudeBot/1\.0;" 12;
 	"~ Barkrowler/" 13;
 	"~ DataForSeoBot/" 14;
+	"~ MJ12bot/" 15;
 }
 
 limit_req_zone $meta_crawler zone=sframeIp:4m rate=8r/m;
