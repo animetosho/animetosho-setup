@@ -32,7 +32,7 @@ location ~ ^/(inc)/ {
 	}
 }
 location / {
-	location ~* ^/[^/]*\.(js|css|html|htm|xml|txt|ico|jpg|gif|jpeg|png)$ {
+	location ~* ^/[^/]*\.(js|css|html|htm|xml|txt|ico|jpg|gif|jpeg|png|torrent)$ {
 		gzip_static on;
 		expires 7d;
 		# send file directly
